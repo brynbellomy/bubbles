@@ -458,6 +458,13 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		for i := 0; i < count; i++ {
 			m.CursorUp()
 		}
+	case "enter":
+		// <CR> in normal/visual mode: move down by count, then to first
+		// non-blank of the resulting line. Mapped equivalent of `+`.
+		for i := 0; i < count; i++ {
+			m.CursorDown()
+		}
+		m.vimMotionFirstNonBlank()
 	case "w":
 		for i := 0; i < count; i++ {
 			m.vimMotionWordForward(vimWordClass)

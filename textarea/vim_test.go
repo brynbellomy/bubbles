@@ -14,6 +14,11 @@ func keyEsc() tea.Msg {
 	return tea.KeyPressMsg{Code: tea.KeyEscape}
 }
 
+// keyEnter returns a synthesized Enter KeyPressMsg.
+func keyEnter() tea.Msg {
+	return tea.KeyPressMsg{Code: tea.KeyEnter}
+}
+
 // keyCtrl returns a synthesized Ctrl+<r> KeyPressMsg.
 func keyCtrl(r rune) tea.Msg {
 	return tea.KeyPressMsg{Code: r, Mod: tea.ModCtrl, Text: ""}
@@ -101,6 +106,69 @@ func TestVim_BasicMotions_hjkl(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVim_EnterMotionNormal(t *testing.T) {
+	t.Run("enter moves down then to first non-blank", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello\n   world")
+		m.row = 0
+		m.SetCursorColumn(2)
+		m, _ = m.Update(keyEnter())
+		if m.Line() != 1 {
+			t.Fatalf("row: got %d want 1", m.Line())
+		}
+		if m.Column() != 3 {
+			t.Fatalf("col: got %d want 3 (first non-blank)", m.Column())
+		}
+	})
+	t.Run("enter at last row stays put on first non-blank", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\n  b")
+		m.row = 1
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyEnter())
+		if m.Line() != 1 {
+			t.Fatalf("row: got %d want 1", m.Line())
+		}
+		// CursorDown is a no-op at last row; first-non-blank still adjusts col.
+		if m.Column() != 2 {
+			t.Fatalf("col: got %d want 2", m.Column())
+		}
+	})
+	t.Run("enter extends visual selection down a line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello\n  world")
+		m.row = 0
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyEnter())
+		if m.VimMode() != ModeVisualChar {
+			t.Fatalf("mode: got %v want ModeVisualChar", m.VimMode())
+		}
+		if m.Line() != 1 || m.Column() != 2 {
+			t.Fatalf("cursor: got row=%d col=%d want row=1 col=2", m.Line(), m.Column())
+		}
+		if m.vim.selStartRow != 0 || m.vim.selStartCol != 0 {
+			t.Fatalf("anchor moved: got row=%d col=%d", m.vim.selStartRow, m.vim.selStartCol)
+		}
+	})
+	t.Run("enter in visual line extends row range", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m.row = 0
+		m, _ = m.Update(keyPress('V'))
+		m, _ = m.Update(keyEnter())
+		if m.VimMode() != ModeVisualLine {
+			t.Fatalf("mode: got %v want ModeVisualLine", m.VimMode())
+		}
+		if m.Line() != 1 {
+			t.Fatalf("row: got %d want 1", m.Line())
+		}
+		if m.vim.selStartRow != 0 {
+			t.Fatalf("anchor row moved: got %d want 0", m.vim.selStartRow)
+		}
+	})
 }
 
 func TestVim_EscFromInsertEntersNormal(t *testing.T) {
