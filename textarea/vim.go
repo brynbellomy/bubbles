@@ -354,6 +354,12 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vim.mode = ModeInsert
 	case "Y":
 		m.vimYankCurrentLine()
+	case "p":
+		m.snapshotUndo()
+		m.vimPaste(true) // after
+	case "P":
+		m.snapshotUndo()
+		m.vimPaste(false) // before
 	case "r":
 		m.vim.pendingOp = 'r'
 	case "~":
@@ -643,6 +649,47 @@ func (m *Model) vimYankCurrentLine() {
 func (m *Model) vimYankToEOL() {
 	m.vim.yankBuf = string(m.value[m.row][m.col:])
 	m.vim.yankLinewise = false
+}
+
+// vimPaste inserts yankBuf relative to the cursor. If linewise, the buffer
+// becomes a new line below (after=true) or above (after=false) the current row.
+// If charwise, chars are spliced in after (after=true) or at (after=false) the
+// cursor column. The cursor lands on the last pasted character in both cases.
+func (m *Model) vimPaste(after bool) {
+	if m.vim.yankBuf == "" {
+		return
+	}
+	if m.vim.yankLinewise {
+		newRow := m.row
+		if after {
+			newRow = m.row + 1
+		}
+		newLine := []rune(m.vim.yankBuf)
+		if newRow >= len(m.value) {
+			m.value = append(m.value, newLine)
+		} else {
+			m.value = append(m.value[:newRow+1], m.value[newRow:]...)
+			m.value[newRow] = newLine
+		}
+		m.row = newRow
+		// Vim parks cursor on first non-blank of pasted line.
+		m.vimMotionFirstNonBlank()
+		return
+	}
+	// Charwise: determine insertion column.
+	insertCol := m.col
+	if after && m.col < len(m.value[m.row]) {
+		insertCol = m.col + 1
+	}
+	runes := []rune(m.vim.yankBuf)
+	line := m.value[m.row]
+	newLine := make([]rune, 0, len(line)+len(runes))
+	newLine = append(newLine, line[:insertCol]...)
+	newLine = append(newLine, runes...)
+	newLine = append(newLine, line[insertCol:]...)
+	m.value[m.row] = newLine
+	// Cursor on last pasted char.
+	m.SetCursorColumn(insertCol + len(runes) - 1)
 }
 
 // vimDeleteCurrentLine removes m.row from value, parking the cursor on the

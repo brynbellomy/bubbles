@@ -565,3 +565,60 @@ func TestVim_Undo(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_Paste(t *testing.T) {
+	t.Run("p pastes linewise after current row", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m.row = 0
+		m, _ = m.Update(keyPress('y'))
+		m, _ = m.Update(keyPress('y')) // yank "a" linewise
+		m.row = 2                       // cursor on "c"
+		m, _ = m.Update(keyPress('p'))
+		if m.Value() != "a\nb\nc\na" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.Line() != 3 {
+			t.Fatalf("row: got %d want 3", m.Line())
+		}
+	})
+	t.Run("P pastes linewise before current row", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb")
+		m.row = 0
+		m.vim.yankBuf = "X"
+		m.vim.yankLinewise = true
+		m, _ = m.Update(keyPress('P'))
+		if m.Value() != "X\na\nb" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.Line() != 0 {
+			t.Fatalf("row: got %d want 0", m.Line())
+		}
+	})
+	t.Run("p pastes charwise after cursor", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("ac")
+		m.SetCursorColumn(0)
+		m.vim.yankBuf = "b"
+		m.vim.yankLinewise = false
+		m, _ = m.Update(keyPress('p'))
+		if m.Value() != "abc" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.Column() != 1 {
+			t.Fatalf("col: got %d want 1", m.Column())
+		}
+	})
+	t.Run("P pastes charwise before cursor", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("ac")
+		m.SetCursorColumn(1)
+		m.vim.yankBuf = "b"
+		m.vim.yankLinewise = false
+		m, _ = m.Update(keyPress('P'))
+		if m.Value() != "abc" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+}
