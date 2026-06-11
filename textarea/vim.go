@@ -426,6 +426,14 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		for i := 0; i < count; i++ {
 			m.vimToggleCaseUnderCursor()
 		}
+	case "v":
+		m.vim.mode = ModeVisualChar
+		m.vim.selStartRow = m.row
+		m.vim.selStartCol = m.col
+	case "V":
+		m.vim.mode = ModeVisualLine
+		m.vim.selStartRow = m.row
+		m.vim.selStartCol = 0
 	case "u":
 		if s := m.undo.undo(m.currentSnapshot()); s != nil {
 			m.restoreSnapshot(s)

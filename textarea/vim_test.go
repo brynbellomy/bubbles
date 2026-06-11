@@ -818,3 +818,50 @@ func TestVim_CaseOperators(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_VisualEntry(t *testing.T) {
+	t.Run("v enters visual char mode", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('v'))
+		if m.VimMode() != ModeVisualChar {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+		if m.vim.selStartCol != 1 {
+			t.Fatalf("selStartCol: got %d want 1", m.vim.selStartCol)
+		}
+	})
+	t.Run("V enters visual line mode", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m.row = 1
+		m, _ = m.Update(keyPress('V'))
+		if m.VimMode() != ModeVisualLine {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+	})
+	t.Run("motion extends visual selection", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('l'))
+		m, _ = m.Update(keyPress('l'))
+		if m.Column() != 2 {
+			t.Fatalf("col: got %d", m.Column())
+		}
+		if m.vim.selStartCol != 0 {
+			t.Fatalf("selStart unchanged: got %d", m.vim.selStartCol)
+		}
+	})
+	t.Run("Esc exits visual", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyEsc())
+		if m.VimMode() != ModeNormal {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+	})
+}
