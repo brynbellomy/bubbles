@@ -429,6 +429,87 @@ func TestVim_InsertEntries(t *testing.T) {
 	}
 }
 
+func TestVim_LinewiseOps(t *testing.T) {
+	t.Run("dd deletes current line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m.row = 1
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('d'))
+		if m.Value() != "a\nc" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("dd of last line drops it", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m.row = 2
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('d'))
+		if m.Value() != "a\nb" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.Line() != 1 {
+			t.Fatalf("row: got %d want 1", m.Line())
+		}
+	})
+	t.Run("D deletes to end of line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello world")
+		m.SetCursorColumn(5)
+		m, _ = m.Update(keyPress('D'))
+		if m.Value() != "hello" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("C deletes to end and enters insert", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello world")
+		m.SetCursorColumn(5)
+		m, _ = m.Update(keyPress('C'))
+		if m.Value() != "hello" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.VimMode() != ModeInsert {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+	})
+	t.Run("cc clears line and enters insert", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nhello\nb")
+		m.row = 1
+		m, _ = m.Update(keyPress('c'))
+		m, _ = m.Update(keyPress('c'))
+		if m.Value() != "a\n\nb" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.VimMode() != ModeInsert {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+	})
+	t.Run("yy yanks line linewise", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello\nworld")
+		m.row = 0
+		m, _ = m.Update(keyPress('y'))
+		m, _ = m.Update(keyPress('y'))
+		if m.vim.yankBuf != "hello" {
+			t.Fatalf("yankBuf: got %q want %q", m.vim.yankBuf, "hello")
+		}
+		if !m.vim.yankLinewise {
+			t.Fatalf("expected yankLinewise=true")
+		}
+	})
+	t.Run("Y is alias for yy", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m, _ = m.Update(keyPress('Y'))
+		if m.vim.yankBuf != "hello" || !m.vim.yankLinewise {
+			t.Fatalf("Y didn't yank linewise: buf=%q line=%v", m.vim.yankBuf, m.vim.yankLinewise)
+		}
+	})
+}
+
 func TestVim_Undo(t *testing.T) {
 	t.Run("u reverts x", func(t *testing.T) {
 		m := vimSetup(t)

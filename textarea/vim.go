@@ -176,6 +176,29 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
+	// Pending d/c/y operators waiting for doubled letter (dd/cc/yy).
+	// Task 12 will extend this to handle motions; for now ONLY the doubled
+	// letter case fires; any other key clears the pending op.
+	if m.vim.pendingOp == 'd' || m.vim.pendingOp == 'c' || m.vim.pendingOp == 'y' {
+		op := m.vim.pendingOp
+		m.vim.pendingOp = 0
+		s := msg.String()
+		if string(op) == s {
+			m.snapshotUndo()
+			m.vimYankCurrentLine()
+			if op == 'c' {
+				m.vimClearCurrentLine()
+				m.vim.mode = ModeInsert
+			} else if op == 'd' {
+				m.vimDeleteCurrentLine()
+			}
+			// yy is a pure yank; no mutation.
+			return
+		}
+		// Other keys (motions) — deferred to Task 12. For now, swallow.
+		return
+	}
+
 	s := msg.String()
 
 	// Digit input — counts. '0' is a motion only when no count is pending.
@@ -314,6 +337,23 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 				m.vimDeleteCharUnderCursor()
 			}
 		}
+	case "d":
+		m.vim.pendingOp = 'd'
+	case "c":
+		m.vim.pendingOp = 'c'
+	case "y":
+		m.vim.pendingOp = 'y'
+	case "D":
+		m.snapshotUndo()
+		m.vimYankToEOL()
+		m.vimDeleteToEOL()
+	case "C":
+		m.snapshotUndo()
+		m.vimYankToEOL()
+		m.vimDeleteToEOL()
+		m.vim.mode = ModeInsert
+	case "Y":
+		m.vimYankCurrentLine()
 	case "r":
 		m.vim.pendingOp = 'r'
 	case "~":
@@ -591,6 +631,47 @@ func (m *Model) vimFindRepeat(reverse bool) {
 		}
 	}
 	m.vimFindChar(kind, m.vim.lastFind.ch)
+}
+
+// vimYankCurrentLine stores the current row's text in yankBuf linewise.
+func (m *Model) vimYankCurrentLine() {
+	m.vim.yankBuf = string(m.value[m.row])
+	m.vim.yankLinewise = true
+}
+
+// vimYankToEOL stores value[row][col:] charwise.
+func (m *Model) vimYankToEOL() {
+	m.vim.yankBuf = string(m.value[m.row][m.col:])
+	m.vim.yankLinewise = false
+}
+
+// vimDeleteCurrentLine removes m.row from value, parking the cursor on the
+// line that takes its place (or the previous line if it was the last).
+func (m *Model) vimDeleteCurrentLine() {
+	if len(m.value) == 1 {
+		m.value[0] = m.value[0][:0]
+		m.SetCursorColumn(0)
+		return
+	}
+	m.value = append(m.value[:m.row], m.value[m.row+1:]...)
+	if m.row >= len(m.value) {
+		m.row = len(m.value) - 1
+	}
+	m.SetCursorColumn(0)
+}
+
+// vimDeleteToEOL removes value[row][col:].
+func (m *Model) vimDeleteToEOL() {
+	m.value[m.row] = m.value[m.row][:m.col]
+	if m.col > 0 {
+		m.SetCursorColumn(m.col - 1)
+	}
+}
+
+// vimClearCurrentLine empties the current row without removing it.
+func (m *Model) vimClearCurrentLine() {
+	m.value[m.row] = m.value[m.row][:0]
+	m.SetCursorColumn(0)
 }
 
 // vimMotionWordEndForward implements `e`.
