@@ -56,6 +56,15 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
+	// Pending `g` prefix (for gg). gu/gU come in Task 17.
+	if m.vim.pendingOp == 'g' {
+		m.vim.pendingOp = 0
+		if msg.String() == "g" {
+			m.vimMotionFirstLine()
+		}
+		return
+	}
+
 	switch msg.String() {
 	case "h":
 		m.vimMotionCharLeft()
@@ -77,6 +86,16 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vimMotionWordEndForward(vimWordClass)
 	case "E":
 		m.vimMotionWordEndForward(vimWORDClass)
+	case "0":
+		m.vimMotionLineStart()
+	case "^":
+		m.vimMotionFirstNonBlank()
+	case "$":
+		m.vimMotionLineEnd()
+	case "g":
+		m.vim.pendingOp = 'g'
+	case "G":
+		m.vimMotionLastLine()
 	}
 }
 
@@ -179,6 +198,42 @@ func (m *Model) vimMotionWordBackward(classFn func(rune) int) {
 		}
 		return
 	}
+}
+
+// vimMotionLineStart is `0`.
+func (m *Model) vimMotionLineStart() { m.SetCursorColumn(0) }
+
+// vimMotionFirstNonBlank is `^`.
+func (m *Model) vimMotionFirstNonBlank() {
+	line := m.value[m.row]
+	col := 0
+	for col < len(line) && unicode.IsSpace(line[col]) {
+		col++
+	}
+	m.SetCursorColumn(col)
+}
+
+// vimMotionLineEnd is `$` — cursor on last char of line, not past.
+func (m *Model) vimMotionLineEnd() {
+	if n := len(m.value[m.row]); n > 0 {
+		m.SetCursorColumn(n - 1)
+	} else {
+		m.SetCursorColumn(0)
+	}
+}
+
+// vimMotionFirstLine is `gg`.
+func (m *Model) vimMotionFirstLine() {
+	m.row = 0
+	m.vimMotionFirstNonBlank()
+	m.repositionView()
+}
+
+// vimMotionLastLine is `G` (no count).
+func (m *Model) vimMotionLastLine() {
+	m.row = len(m.value) - 1
+	m.vimMotionFirstNonBlank()
+	m.repositionView()
 }
 
 // vimMotionWordEndForward implements `e`.

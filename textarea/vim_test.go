@@ -128,6 +128,55 @@ func TestVim_EscFromInsertAtCol0StaysPut(t *testing.T) {
 	}
 }
 
+func TestVim_LineMotions(t *testing.T) {
+	t.Run("0 goes to col 0", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("  hello")
+		m.SetCursorColumn(5)
+		m, _ = m.Update(keyPress('0'))
+		if m.Column() != 0 {
+			t.Fatalf("expected col 0, got %d", m.Column())
+		}
+	})
+	t.Run("^ goes to first non-blank", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("   hi")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('^'))
+		if m.Column() != 3 {
+			t.Fatalf("expected col 3, got %d", m.Column())
+		}
+	})
+	t.Run("$ goes to end of line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('$'))
+		if m.Column() != 4 {
+			t.Fatalf("expected col 4, got %d", m.Column())
+		}
+	})
+	t.Run("gg goes to first line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m.row = 2
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('g'))
+		m, _ = m.Update(keyPress('g'))
+		if m.Line() != 0 {
+			t.Fatalf("expected row 0, got %d", m.Line())
+		}
+	})
+	t.Run("G goes to last line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m, _ = m.Update(keyPress('G'))
+		if m.Line() != 2 {
+			t.Fatalf("expected row 2, got %d", m.Line())
+		}
+	})
+}
+
 func TestVim_WordMotions(t *testing.T) {
 	cases := []struct {
 		name, seed string
