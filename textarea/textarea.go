@@ -1273,6 +1273,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			break
 		}
 		switch {
+		case m.vimEnabled && key.Matches(msg, vimEscBinding):
+			m.vim.mode = ModeNormal
+			if m.col > 0 {
+				m.SetCursorColumn(m.col - 1)
+			}
 		case key.Matches(msg, m.KeyMap.DeleteAfterCursor):
 			m.col = clamp(m.col, 0, len(m.value[m.row]))
 			if m.col >= len(m.value[m.row]) {

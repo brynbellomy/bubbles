@@ -47,7 +47,36 @@ var vimEscBinding = key.NewBinding(key.WithKeys("esc", "ctrl+["))
 
 // vimUpdate handles a key press in a non-Insert vim mode.
 func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
-	// Task 1 stub: swallow everything in non-Insert modes. Later tasks fill
-	// this in with motion, operator, and text-object handling.
-	_ = msg
+	// Esc / Ctrl-[ from any non-Insert mode returns to Normal and clears
+	// pending state.
+	if key.Matches(msg, vimEscBinding) {
+		m.SetVimMode(ModeNormal)
+		return
+	}
+
+	// Single-char dispatch for Task 2: hjkl only. Later tasks expand.
+	switch msg.String() {
+	case "h":
+		m.vimMotionCharLeft()
+	case "l":
+		m.vimMotionCharRight()
+	case "j":
+		m.CursorDown()
+	case "k":
+		m.CursorUp()
+	}
+}
+
+// vimMotionCharLeft is vim's h — char left without wrapping to previous line.
+func (m *Model) vimMotionCharLeft() {
+	if m.col > 0 {
+		m.SetCursorColumn(m.col - 1)
+	}
+}
+
+// vimMotionCharRight is vim's l — char right without wrapping to next line.
+func (m *Model) vimMotionCharRight() {
+	if m.col < len(m.value[m.row]) {
+		m.SetCursorColumn(m.col + 1)
+	}
 }
