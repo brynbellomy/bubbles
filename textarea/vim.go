@@ -169,11 +169,18 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
-	// Pending `g` prefix (for gg). gu/gU come in Task 17.
+	// Pending `g` prefix (gg / gu / gU).
 	if m.vim.pendingOp == 'g' {
-		m.vim.pendingOp = 0
-		if msg.String() == "g" {
+		switch msg.String() {
+		case "g":
+			m.vim.pendingOp = 0
 			m.vimMotionFirstLine()
+		case "u":
+			m.vim.pendingOp = 'L' // pending "lowercase over motion"
+		case "U":
+			m.vim.pendingOp = 'U' // pending "uppercase over motion"
+		default:
+			m.vim.pendingOp = 0
 		}
 		return
 	}
@@ -235,6 +242,19 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		if op == 'c' {
 			m.vim.mode = ModeInsert
 		}
+		return
+	}
+
+	if m.vim.pendingOp == 'L' || m.vim.pendingOp == 'U' {
+		op := m.vim.pendingOp
+		m.vim.pendingOp = 0
+		s := msg.String()
+		r1, c1, r2, c2, _, ok := m.vimMotionRange(s, 1)
+		if !ok {
+			return
+		}
+		m.snapshotUndo()
+		m.vimApplyCase(r1, c1, r2, c2, op == 'U')
 		return
 	}
 
@@ -1110,4 +1130,29 @@ func (m *Model) vimObjectWord(inner bool) (r1, c1, r2, c2 int, ok bool) {
 		}
 	}
 	return m.row, start, m.row, end, true
+}
+
+// vimApplyCase transforms case across a range.
+func (m *Model) vimApplyCase(r1, c1, r2, c2 int, upper bool) {
+	transform := unicode.ToLower
+	if upper {
+		transform = unicode.ToUpper
+	}
+	for r := r1; r <= r2; r++ {
+		line := m.value[r]
+		start := 0
+		end := len(line)
+		if r == r1 {
+			start = c1
+		}
+		if r == r2 {
+			end = c2
+		}
+		if end > len(line) {
+			end = len(line)
+		}
+		for i := start; i < end; i++ {
+			line[i] = transform(line[i])
+		}
+	}
 }

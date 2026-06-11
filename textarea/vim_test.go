@@ -793,3 +793,28 @@ func TestVim_TextObjectsParagraph(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_CaseOperators(t *testing.T) {
+	t.Run("guw lowercases word forward", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("FOO BAR")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('g'))
+		m, _ = m.Update(keyPress('u'))
+		m, _ = m.Update(keyPress('w'))
+		if m.Value() != "foo BAR" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("gUw uppercases word forward", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("foo bar")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('g'))
+		m, _ = m.Update(keyPress('U'))
+		m, _ = m.Update(keyPress('w'))
+		if m.Value() != "FOO bar" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+}
