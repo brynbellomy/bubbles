@@ -932,8 +932,48 @@ func (m *Model) vimTextObjectRange(qual rune, obj string) (r1, c1, r2, c2 int, o
 		return m.vimObjectBracket(inner, '{', '}')
 	case "[", "]":
 		return m.vimObjectBracket(inner, '[', ']')
+	case "p":
+		return m.vimObjectParagraph(inner)
 	}
 	return 0, 0, 0, 0, false
+}
+
+// vimObjectParagraph returns row-range covering the paragraph at cursor.
+// Paragraph = run of non-blank lines, blank-line-delimited. ip is the run; ap
+// also includes the trailing blank line if any.
+func (m *Model) vimObjectParagraph(inner bool) (r1, c1, r2, c2 int, ok bool) {
+	isBlank := func(r int) bool {
+		return r < 0 || r >= len(m.value) || len(strings.TrimSpace(string(m.value[r]))) == 0
+	}
+	// If the cursor is on a blank line, the paragraph object collapses on that
+	// blank run.
+	if isBlank(m.row) {
+		top := m.row
+		for top > 0 && isBlank(top-1) {
+			top--
+		}
+		bot := m.row
+		for bot < len(m.value)-1 && isBlank(bot+1) {
+			bot++
+		}
+		return top, 0, bot + 1, 0, true
+	}
+	top := m.row
+	for top > 0 && !isBlank(top-1) {
+		top--
+	}
+	bot := m.row
+	for bot < len(m.value)-1 && !isBlank(bot+1) {
+		bot++
+	}
+	if !inner && bot+1 < len(m.value) && isBlank(bot+1) {
+		bot++
+	}
+	if bot+1 < len(m.value) {
+		return top, 0, bot + 1, 0, true
+	}
+	// Last paragraph: range to end of last line.
+	return top, 0, bot, len(m.value[bot]), true
 }
 
 // vimObjectQuote computes i{q}/a{q} for a quote char q. Returns range on the

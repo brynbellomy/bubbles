@@ -768,3 +768,28 @@ func TestVim_TextObjectsBrackets(t *testing.T) {
 		})
 	}
 }
+
+func TestVim_TextObjectsParagraph(t *testing.T) {
+	t.Run("dip deletes paragraph at cursor", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\n\nc\nd\n\ne")
+		m.row = 3 // on "c"
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('i'))
+		m, _ = m.Update(keyPress('p'))
+		if m.Value() != "a\nb\n\n\ne" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("dap deletes paragraph + trailing blank", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\n\nc\nd\n\ne")
+		m.row = 3
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('a'))
+		m, _ = m.Update(keyPress('p'))
+		if m.Value() != "a\nb\n\ne" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+}
