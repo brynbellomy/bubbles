@@ -37,6 +37,7 @@ type vimState struct {
 	pendingOp        rune
 	pendingCount     int
 	pendingFindKind  rune    // active f/F/t/T prompt waiting for target char; 0 if none
+	pendingObject    rune    // active text-object qualifier 'i' or 'a' after d/c/y; 0 if none
 	lastFind         vimFind // last completed find, for ; and , repeat
 	selStartRow      int
 	selStartCol      int
@@ -177,6 +178,28 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
+	// Pending text-object qualifier ('i' or 'a' after d/c/y).
+	if m.vim.pendingObject != 0 {
+		qual := m.vim.pendingObject
+		op := m.vim.pendingOp
+		m.vim.pendingObject = 0
+		m.vim.pendingOp = 0
+		s := msg.String()
+		r1, c1, r2, c2, ok := m.vimTextObjectRange(qual, s)
+		if !ok {
+			return
+		}
+		m.snapshotUndo()
+		m.vimYankRange(r1, c1, r2, c2)
+		if op != 'y' {
+			m.vimDeleteRange(r1, c1, r2, c2)
+		}
+		if op == 'c' {
+			m.vim.mode = ModeInsert
+		}
+		return
+	}
+
 	if m.vim.pendingOp == 'd' || m.vim.pendingOp == 'c' || m.vim.pendingOp == 'y' {
 		op := m.vim.pendingOp
 		m.vim.pendingOp = 0
@@ -191,6 +214,12 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			} else if op == 'd' {
 				m.vimDeleteCurrentLine()
 			}
+			return
+		}
+		// Text object qualifier ('i' or 'a') — wait for object key.
+		if s == "i" || s == "a" {
+			m.vim.pendingObject = rune(s[0])
+			m.vim.pendingOp = op // keep op for the pendingObject branch
 			return
 		}
 		// Motion-based op.
@@ -883,4 +912,48 @@ func (m *Model) vimDeleteRange(r1, c1, r2, c2 int) {
 	}
 	m.row = r1
 	m.SetCursorColumn(c1)
+}
+
+// vimTextObjectRange resolves a text-object (i/a + obj key) to a range.
+func (m *Model) vimTextObjectRange(qual rune, obj string) (r1, c1, r2, c2 int, ok bool) {
+	inner := qual == 'i'
+	switch obj {
+	case "w":
+		return m.vimObjectWord(inner)
+	}
+	return 0, 0, 0, 0, false
+}
+
+// vimObjectWord computes iw/aw bounds. iw = word at cursor (no surrounding
+// whitespace). aw = word + trailing whitespace (or leading if at end).
+func (m *Model) vimObjectWord(inner bool) (r1, c1, r2, c2 int, ok bool) {
+	line := m.value[m.row]
+	if len(line) == 0 || m.col >= len(line) {
+		return 0, 0, 0, 0, false
+	}
+	cls := vimWordClass(line[m.col])
+	start := m.col
+	for start > 0 && vimWordClass(line[start-1]) == cls {
+		start--
+	}
+	end := m.col
+	for end < len(line) && vimWordClass(line[end]) == cls {
+		end++
+	}
+	if !inner {
+		// `aw`: include trailing whitespace (or leading if no trailing).
+		extEnd := end
+		for extEnd < len(line) && unicode.IsSpace(line[extEnd]) {
+			extEnd++
+		}
+		if extEnd > end {
+			end = extEnd
+		} else {
+			// Extend leading whitespace.
+			for start > 0 && unicode.IsSpace(line[start-1]) {
+				start--
+			}
+		}
+	}
+	return m.row, start, m.row, end, true
 }

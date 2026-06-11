@@ -501,6 +501,7 @@ func (m *Model) SetVimMode(mode VimMode) {
 	m.vim.pendingOp = 0
 	m.vim.pendingCount = 0
 	m.vim.pendingFindKind = 0
+	m.vim.pendingObject = 0
 }
 
 // updateVirtualCursorStyle sets styling on the virtual cursor based on the

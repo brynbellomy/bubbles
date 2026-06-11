@@ -665,3 +665,42 @@ func TestVim_OperatorEntersInsert_cw(t *testing.T) {
 		t.Fatalf("expected ModeInsert after cw, got %v", m.VimMode())
 	}
 }
+
+func TestVim_TextObjectsWord(t *testing.T) {
+	t.Run("diw deletes inner word", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("foo bar baz")
+		m.SetCursorColumn(5) // inside "bar"
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('i'))
+		m, _ = m.Update(keyPress('w'))
+		if m.Value() != "foo  baz" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("daw deletes a word including trailing space", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("foo bar baz")
+		m.SetCursorColumn(5)
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('a'))
+		m, _ = m.Update(keyPress('w'))
+		if m.Value() != "foo baz" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("ciw enters insert", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("foo bar")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('c'))
+		m, _ = m.Update(keyPress('i'))
+		m, _ = m.Update(keyPress('w'))
+		if m.VimMode() != ModeInsert {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+		if m.Value() != " bar" {
+			t.Fatalf("value: got %q", m.Value())
+		}
+	})
+}
