@@ -527,6 +527,12 @@ func (m *Model) SetValue(s string) {
 	m.Reset()
 	m.InsertString(s)
 	m.recalculateHeight()
+	// In Normal mode the cursor must not sit past the last character.
+	if m.vimEnabled && m.vim.mode == ModeNormal {
+		if n := len(m.value[m.row]); n > 0 && m.col >= n {
+			m.col = n - 1
+		}
+	}
 }
 
 // InsertString inserts a string at the cursor position.

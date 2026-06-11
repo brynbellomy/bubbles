@@ -47,16 +47,15 @@ type vimState struct {
 // vimEscBinding matches Esc and Ctrl-[ in both Insert and non-Insert modes.
 var vimEscBinding = key.NewBinding(key.WithKeys("esc", "ctrl+["))
 
+const vimMaxCount = 9999
+
 // vimUpdate handles a key press in a non-Insert vim mode.
 func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
-	// Esc / Ctrl-[ from any non-Insert mode returns to Normal and clears
-	// pending state.
 	if key.Matches(msg, vimEscBinding) {
 		m.SetVimMode(ModeNormal)
 		return
 	}
 
-	// Pending find target (f/F/t/T waiting for next char).
 	if m.vim.pendingFindKind != 0 {
 		kind := m.vim.pendingFindKind
 		m.vim.pendingFindKind = 0
@@ -76,27 +75,71 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
-	switch msg.String() {
+	s := msg.String()
+
+	// Digit input — counts. '0' is a motion only when no count is pending.
+	if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
+		m.vim.pendingCount = m.vim.pendingCount*10 + int(s[0]-'0')
+		if m.vim.pendingCount > vimMaxCount {
+			m.vim.pendingCount = vimMaxCount
+		}
+		return
+	}
+	if s == "0" && m.vim.pendingCount > 0 {
+		m.vim.pendingCount = m.vim.pendingCount * 10
+		if m.vim.pendingCount > vimMaxCount {
+			m.vim.pendingCount = vimMaxCount
+		}
+		return
+	}
+
+	count := m.vim.pendingCount
+	if count == 0 {
+		count = 1
+	}
+	m.vim.pendingCount = 0
+
+	switch s {
 	case "h":
-		m.vimMotionCharLeft()
+		for i := 0; i < count; i++ {
+			m.vimMotionCharLeft()
+		}
 	case "l":
-		m.vimMotionCharRight()
+		for i := 0; i < count; i++ {
+			m.vimMotionCharRight()
+		}
 	case "j":
-		m.CursorDown()
+		for i := 0; i < count; i++ {
+			m.CursorDown()
+		}
 	case "k":
-		m.CursorUp()
+		for i := 0; i < count; i++ {
+			m.CursorUp()
+		}
 	case "w":
-		m.vimMotionWordForward(vimWordClass)
+		for i := 0; i < count; i++ {
+			m.vimMotionWordForward(vimWordClass)
+		}
 	case "W":
-		m.vimMotionWordForward(vimWORDClass)
+		for i := 0; i < count; i++ {
+			m.vimMotionWordForward(vimWORDClass)
+		}
 	case "b":
-		m.vimMotionWordBackward(vimWordClass)
+		for i := 0; i < count; i++ {
+			m.vimMotionWordBackward(vimWordClass)
+		}
 	case "B":
-		m.vimMotionWordBackward(vimWORDClass)
+		for i := 0; i < count; i++ {
+			m.vimMotionWordBackward(vimWORDClass)
+		}
 	case "e":
-		m.vimMotionWordEndForward(vimWordClass)
+		for i := 0; i < count; i++ {
+			m.vimMotionWordEndForward(vimWordClass)
+		}
 	case "E":
-		m.vimMotionWordEndForward(vimWORDClass)
+		for i := 0; i < count; i++ {
+			m.vimMotionWordEndForward(vimWORDClass)
+		}
 	case "0":
 		m.vimMotionLineStart()
 	case "^":
@@ -106,7 +149,13 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 	case "g":
 		m.vim.pendingOp = 'g'
 	case "G":
-		m.vimMotionLastLine()
+		if count > 1 {
+			m.row = clamp(count-1, 0, len(m.value)-1)
+			m.vimMotionFirstNonBlank()
+			m.repositionView()
+		} else {
+			m.vimMotionLastLine()
+		}
 	case "f":
 		m.vim.pendingFindKind = 'f'
 	case "F":
@@ -129,9 +178,10 @@ func (m *Model) vimMotionCharLeft() {
 	}
 }
 
-// vimMotionCharRight is vim's l — char right without wrapping to next line.
+// vimMotionCharRight is vim's l — char right, stopping at the last character
+// of the line (Normal mode does not place cursor past the last char).
 func (m *Model) vimMotionCharRight() {
-	if m.col < len(m.value[m.row]) {
+	if n := len(m.value[m.row]); n > 0 && m.col < n-1 {
 		m.SetCursorColumn(m.col + 1)
 	}
 }

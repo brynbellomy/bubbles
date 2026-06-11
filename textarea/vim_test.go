@@ -1,6 +1,7 @@
 package textarea
 
 import (
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -259,4 +260,70 @@ func TestVim_WordMotions(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVim_Counts(t *testing.T) {
+	t.Run("3l moves right 3", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("abcdef")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('3'))
+		m, _ = m.Update(keyPress('l'))
+		if m.Column() != 3 {
+			t.Fatalf("got col=%d, want 3", m.Column())
+		}
+	})
+	t.Run("3w skips 3 words", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("one two three four")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('3'))
+		m, _ = m.Update(keyPress('w'))
+		if m.Column() != 14 { // start of "four"
+			t.Fatalf("got col=%d, want 14", m.Column())
+		}
+	})
+	t.Run("count caps at 9999", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("abc")
+		for _, d := range "99999" {
+			m, _ = m.Update(keyPress(d))
+		}
+		// Verify count was clamped — sending `l` shouldn't loop forever.
+		m, _ = m.Update(keyPress('l'))
+		if m.Column() != 2 { // end of "abc"
+			t.Fatalf("got col=%d, want 2", m.Column())
+		}
+	})
+	t.Run("Esc clears pending count", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("abcdef")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('5'))
+		m, _ = m.Update(keyEsc())
+		m, _ = m.Update(keyPress('l'))
+		if m.Column() != 1 {
+			t.Fatalf("got col=%d, want 1 (count should have been cleared)", m.Column())
+		}
+	})
+	t.Run("0 is motion when no count pending", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(3)
+		m, _ = m.Update(keyPress('0'))
+		if m.Column() != 0 {
+			t.Fatalf("got col=%d, want 0", m.Column())
+		}
+	})
+	t.Run("0 is digit when count pending", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue(strings.Repeat("a", 30))
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('1'))
+		m, _ = m.Update(keyPress('0'))
+		m, _ = m.Update(keyPress('l'))
+		if m.Column() != 10 {
+			t.Fatalf("got col=%d, want 10", m.Column())
+		}
+	})
 }
