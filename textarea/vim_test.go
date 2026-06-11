@@ -740,3 +740,31 @@ func TestVim_TextObjectsQuotes(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_TextObjectsBrackets(t *testing.T) {
+	cases := []struct {
+		name, seed string
+		col        int
+		keys       []rune
+		want       string
+	}{
+		{"di(", "f(bar)g", 3, []rune{'d', 'i', '('}, "f()g"},
+		{"da(", "f(bar)g", 3, []rune{'d', 'a', '('}, "fg"},
+		{"di{", "f{bar}g", 3, []rune{'d', 'i', '{'}, "f{}g"},
+		{"di[", "f[bar]g", 3, []rune{'d', 'i', '['}, "f[]g"},
+		{"di)", "f(bar)g", 3, []rune{'d', 'i', ')'}, "f()g"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := vimSetup(t)
+			m.SetValue(tc.seed)
+			m.SetCursorColumn(tc.col)
+			for _, k := range tc.keys {
+				m, _ = m.Update(keyPress(k))
+			}
+			if m.Value() != tc.want {
+				t.Fatalf("got %q want %q", m.Value(), tc.want)
+			}
+		})
+	}
+}

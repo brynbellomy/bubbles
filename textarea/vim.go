@@ -926,6 +926,12 @@ func (m *Model) vimTextObjectRange(qual rune, obj string) (r1, c1, r2, c2 int, o
 		return m.vimObjectQuote(inner, '\'')
 	case "`":
 		return m.vimObjectQuote(inner, '`')
+	case "(", ")":
+		return m.vimObjectBracket(inner, '(', ')')
+	case "{", "}":
+		return m.vimObjectBracket(inner, '{', '}')
+	case "[", "]":
+		return m.vimObjectBracket(inner, '[', ']')
 	}
 	return 0, 0, 0, 0, false
 }
@@ -959,6 +965,67 @@ func (m *Model) vimObjectQuote(inner bool, q rune) (r1, c1, r2, c2 int, ok bool)
 	for i := left + 1; i < len(line); i++ {
 		if line[i] == q {
 			right = i
+			break
+		}
+	}
+	if right == -1 {
+		return 0, 0, 0, 0, false
+	}
+	if inner {
+		return m.row, left + 1, m.row, right, true
+	}
+	return m.row, left, m.row, right + 1, true
+}
+
+// vimObjectBracket finds the matching open/closeR pair on the current line
+// around or after the cursor. Single-line only.
+func (m *Model) vimObjectBracket(inner bool, open, closeR rune) (r1, c1, r2, c2 int, ok bool) {
+	line := m.value[m.row]
+	// Walk back to the most recent unmatched open before/at cursor.
+	depth := 0
+	left := -1
+	for i := m.col; i >= 0 && i < len(line); i-- {
+		switch line[i] {
+		case closeR:
+			depth++
+		case open:
+			if depth == 0 {
+				left = i
+			} else {
+				depth--
+			}
+		}
+		if left != -1 {
+			break
+		}
+	}
+	if left == -1 {
+		// Try forward.
+		for i := m.col; i < len(line); i++ {
+			if line[i] == open {
+				left = i
+				break
+			}
+		}
+	}
+	if left == -1 {
+		return 0, 0, 0, 0, false
+	}
+	// Walk forward for matching close.
+	depth = 0
+	right := -1
+	for i := left + 1; i < len(line); i++ {
+		switch line[i] {
+		case open:
+			depth++
+		case closeR:
+			if depth == 0 {
+				right = i
+				break
+			}
+			depth--
+		}
+		if right != -1 {
 			break
 		}
 	}
