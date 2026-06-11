@@ -622,3 +622,46 @@ func TestVim_Paste(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_OperatorOverMotion(t *testing.T) {
+	cases := []struct {
+		name, seed string
+		col        int
+		keys       []rune
+		wantValue  string
+		wantYank   string
+	}{
+		{"dw deletes word", "foo bar", 0, []rune{'d', 'w'}, "bar", "foo "},
+		{"d$ deletes to end of line", "hello world", 6, []rune{'d', '$'}, "hello ", "world"},
+		{"d0 deletes to start", "hello", 3, []rune{'d', '0'}, "lo", "hel"},
+		{"yw yanks word", "foo bar", 0, []rune{'y', 'w'}, "foo bar", "foo "},
+		{"cw deletes word and enters insert", "foo bar", 0, []rune{'c', 'w'}, "bar", "foo "},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := vimSetup(t)
+			m.SetValue(tc.seed)
+			m.SetCursorColumn(tc.col)
+			for _, k := range tc.keys {
+				m, _ = m.Update(keyPress(k))
+			}
+			if m.Value() != tc.wantValue {
+				t.Fatalf("value: got %q want %q", m.Value(), tc.wantValue)
+			}
+			if m.vim.yankBuf != tc.wantYank {
+				t.Fatalf("yank: got %q want %q", m.vim.yankBuf, tc.wantYank)
+			}
+		})
+	}
+}
+
+func TestVim_OperatorEntersInsert_cw(t *testing.T) {
+	m := vimSetup(t)
+	m.SetValue("foo bar")
+	m.SetCursorColumn(0)
+	m, _ = m.Update(keyPress('c'))
+	m, _ = m.Update(keyPress('w'))
+	if m.VimMode() != ModeInsert {
+		t.Fatalf("expected ModeInsert after cw, got %v", m.VimMode())
+	}
+}

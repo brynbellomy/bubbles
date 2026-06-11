@@ -1,6 +1,7 @@
 package textarea
 
 import (
+	"strings"
 	"unicode"
 
 	"charm.land/bubbles/v2/key"
@@ -176,13 +177,11 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
-	// Pending d/c/y operators waiting for doubled letter (dd/cc/yy).
-	// Task 12 will extend this to handle motions; for now ONLY the doubled
-	// letter case fires; any other key clears the pending op.
 	if m.vim.pendingOp == 'd' || m.vim.pendingOp == 'c' || m.vim.pendingOp == 'y' {
 		op := m.vim.pendingOp
 		m.vim.pendingOp = 0
 		s := msg.String()
+		// Linewise: doubled letter (dd/cc/yy).
 		if string(op) == s {
 			m.snapshotUndo()
 			m.vimYankCurrentLine()
@@ -192,10 +191,21 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			} else if op == 'd' {
 				m.vimDeleteCurrentLine()
 			}
-			// yy is a pure yank; no mutation.
 			return
 		}
-		// Other keys (motions) — deferred to Task 12. For now, swallow.
+		// Motion-based op.
+		r1, c1, r2, c2, _, ok := m.vimMotionRange(s, 1)
+		if !ok {
+			return
+		}
+		m.snapshotUndo()
+		m.vimYankRange(r1, c1, r2, c2)
+		if op != 'y' {
+			m.vimDeleteRange(r1, c1, r2, c2)
+		}
+		if op == 'c' {
+			m.vim.mode = ModeInsert
+		}
 		return
 	}
 
@@ -753,4 +763,124 @@ func (m *Model) vimMotionWordEndForward(classFn func(rune) int) {
 		}
 		return
 	}
+}
+
+// vimMotionRange computes the range covered by a motion key starting from the
+// current cursor. Returns the start (always cursor) and end position, and
+// whether the motion is linewise. Returns ok=false if the key isn't a motion.
+// Internally moves and restores cursor.
+func (m *Model) vimMotionRange(s string, count int) (r1, c1, r2, c2 int, linewise bool, ok bool) {
+	if count == 0 {
+		count = 1
+	}
+	startRow, startCol := m.row, m.col
+	saveRow, saveCol := m.row, m.col
+	defer func() {
+		m.row = saveRow
+		m.SetCursorColumn(saveCol)
+	}()
+	switch s {
+	case "w":
+		for i := 0; i < count; i++ {
+			m.vimMotionWordForward(vimWordClass)
+		}
+	case "W":
+		for i := 0; i < count; i++ {
+			m.vimMotionWordForward(vimWORDClass)
+		}
+	case "b":
+		for i := 0; i < count; i++ {
+			m.vimMotionWordBackward(vimWordClass)
+		}
+	case "B":
+		for i := 0; i < count; i++ {
+			m.vimMotionWordBackward(vimWORDClass)
+		}
+	case "e":
+		for i := 0; i < count; i++ {
+			m.vimMotionWordEndForward(vimWordClass)
+		}
+		// `e` motion is inclusive — bump end by one so operator consumes the
+		// final char.
+		m.SetCursorColumn(m.col + 1)
+	case "E":
+		for i := 0; i < count; i++ {
+			m.vimMotionWordEndForward(vimWORDClass)
+		}
+		m.SetCursorColumn(m.col + 1)
+	case "h":
+		for i := 0; i < count; i++ {
+			m.vimMotionCharLeft()
+		}
+	case "l":
+		for i := 0; i < count; i++ {
+			m.vimMotionCharRight()
+		}
+	case "0":
+		m.vimMotionLineStart()
+	case "^":
+		m.vimMotionFirstNonBlank()
+	case "$":
+		m.vimMotionLineEnd()
+		// `$` is inclusive — bump.
+		m.SetCursorColumn(m.col + 1)
+	default:
+		return 0, 0, 0, 0, false, false
+	}
+	r2, c2 = m.row, m.col
+	r1, c1 = startRow, startCol
+	// Normalize so (r1,c1) <= (r2,c2).
+	if r1 > r2 || (r1 == r2 && c1 > c2) {
+		r1, c1, r2, c2 = r2, c2, r1, c1
+	}
+	return r1, c1, r2, c2, false, true
+}
+
+// vimYankRange copies the text from (r1,c1) to (r2,c2) (exclusive end) into
+// yankBuf as charwise.
+func (m *Model) vimYankRange(r1, c1, r2, c2 int) {
+	var b strings.Builder
+	for r := r1; r <= r2; r++ {
+		line := m.value[r]
+		start := 0
+		end := len(line)
+		if r == r1 {
+			start = c1
+		}
+		if r == r2 {
+			end = c2
+		}
+		if end > len(line) {
+			end = len(line)
+		}
+		if start > end {
+			start = end
+		}
+		b.WriteString(string(line[start:end]))
+		if r < r2 {
+			b.WriteByte('\n')
+		}
+	}
+	m.vim.yankBuf = b.String()
+	m.vim.yankLinewise = false
+}
+
+// vimDeleteRange deletes [r1,c1 .. r2,c2) from value, leaving cursor at
+// (r1,c1).
+func (m *Model) vimDeleteRange(r1, c1, r2, c2 int) {
+	if r1 == r2 {
+		line := m.value[r1]
+		if c2 > len(line) {
+			c2 = len(line)
+		}
+		m.value[r1] = append(line[:c1], line[c2:]...)
+	} else {
+		head := append([]rune{}, m.value[r1][:c1]...)
+		tail := append([]rune{}, m.value[r2][c2:]...)
+		head = append(head, tail...)
+		m.value[r1] = head
+		m.value = append(m.value[:r1+1], m.value[r2+1:]...)
+	}
+	m.row = r1
+	m.SetCursorColumn(c1)
 }
