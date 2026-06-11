@@ -47,6 +47,97 @@ type vimState struct {
 // vimEscBinding matches Esc and Ctrl-[ in both Insert and non-Insert modes.
 var vimEscBinding = key.NewBinding(key.WithKeys("esc", "ctrl+["))
 
+// undoSnapshot captures a complete editor state for undo/redo.
+type undoSnapshot struct {
+	value    [][]rune
+	row, col int
+}
+
+// undoStack is a two-stack undo/redo manager with bounded capacity.
+// undoSnaps holds "before" states pushed before each mutation.
+// redoSnaps holds "after" states saved during undo, popped on redo.
+// The total combined capacity is bounded by defaultUndoCapacity.
+type undoStack struct {
+	undoSnaps []undoSnapshot
+	redoSnaps []undoSnapshot
+	capacity  int
+}
+
+const defaultUndoCapacity = 200
+
+// cloneValue deep-copies a [][]rune value.
+func cloneValue(v [][]rune) [][]rune {
+	out := make([][]rune, len(v))
+	for i, row := range v {
+		out[i] = append([]rune(nil), row...)
+	}
+	return out
+}
+
+// pushUndo saves current state before a mutation and clears the redo stack.
+// If at capacity, the oldest undo entry is dropped.
+func (u *undoStack) pushUndo(s undoSnapshot) {
+	if u.capacity == 0 {
+		u.capacity = defaultUndoCapacity
+	}
+	u.redoSnaps = u.redoSnaps[:0]
+	u.undoSnaps = append(u.undoSnaps, s)
+	if len(u.undoSnaps) > u.capacity {
+		drop := len(u.undoSnaps) - u.capacity
+		u.undoSnaps = u.undoSnaps[drop:]
+	}
+}
+
+// undo pops from undoSnaps and returns the state to restore, saving the
+// provided current state onto redoSnaps. Returns nil if nothing to undo.
+func (u *undoStack) undo(current undoSnapshot) *undoSnapshot {
+	if len(u.undoSnaps) == 0 {
+		return nil
+	}
+	u.redoSnaps = append(u.redoSnaps, current)
+	s := u.undoSnaps[len(u.undoSnaps)-1]
+	u.undoSnaps = u.undoSnaps[:len(u.undoSnaps)-1]
+	return &s
+}
+
+// redo pops from redoSnaps and returns the state to restore, saving the
+// provided current state onto undoSnaps. Returns nil if nothing to redo.
+func (u *undoStack) redo(current undoSnapshot) *undoSnapshot {
+	if len(u.redoSnaps) == 0 {
+		return nil
+	}
+	u.undoSnaps = append(u.undoSnaps, current)
+	s := u.redoSnaps[len(u.redoSnaps)-1]
+	u.redoSnaps = u.redoSnaps[:len(u.redoSnaps)-1]
+	return &s
+}
+
+// snapshotUndo saves the current state as an undo point before a mutation.
+// It clears any pending redo history.
+func (m *Model) snapshotUndo() {
+	m.undo.pushUndo(undoSnapshot{
+		value: cloneValue(m.value),
+		row:   m.row,
+		col:   m.col,
+	})
+}
+
+// currentSnapshot returns the current state as a snapshot (without pushing).
+func (m *Model) currentSnapshot() undoSnapshot {
+	return undoSnapshot{
+		value: cloneValue(m.value),
+		row:   m.row,
+		col:   m.col,
+	}
+}
+
+// restoreSnapshot applies a snapshot to the model.
+func (m *Model) restoreSnapshot(s *undoSnapshot) {
+	m.value = cloneValue(s.value)
+	m.row = s.row
+	m.SetCursorColumn(s.col)
+}
+
 const vimMaxCount = 9999
 
 // vimUpdate handles a key press in a non-Insert vim mode.
@@ -60,6 +151,7 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 	if m.vim.pendingOp == 'r' {
 		m.vim.pendingOp = 0
 		if r, ok := singleRune(msg); ok {
+			m.snapshotUndo()
 			m.vimReplaceCharUnderCursor(r)
 		}
 		return
@@ -178,35 +270,44 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 	case ",":
 		m.vimFindRepeat(true)
 	case "i":
+		m.snapshotUndo() // capture pre-insert state
 		m.vim.mode = ModeInsert
 	case "I":
+		m.snapshotUndo() // capture pre-insert state
 		m.vimMotionFirstNonBlank()
 		m.vim.mode = ModeInsert
 	case "a":
 		// `a` moves cursor right by 1 (past cursor), then enters Insert. The
 		// Normal-mode cap (n-1) doesn't apply once we're in Insert — we want
 		// to be able to append past the last char.
+		m.snapshotUndo() // capture pre-insert state
 		if m.col < len(m.value[m.row]) {
 			m.SetCursorColumn(m.col + 1)
 		}
 		m.vim.mode = ModeInsert
 	case "A":
+		m.snapshotUndo() // capture pre-insert state
 		m.SetCursorColumn(len(m.value[m.row]))
 		m.vim.mode = ModeInsert
 	case "o":
+		m.snapshotUndo() // capture pre-insert state (before line mutation)
 		m.vimOpenLineBelow()
 		m.vim.mode = ModeInsert
 	case "O":
+		m.snapshotUndo() // capture pre-insert state (before line mutation)
 		m.vimOpenLineAbove()
 		m.vim.mode = ModeInsert
 	case "s":
+		m.snapshotUndo() // capture pre-insert state (before deletion)
 		m.vimDeleteCharUnderCursor()
 		m.vim.mode = ModeInsert
 	case "x":
+		m.snapshotUndo()
 		for i := 0; i < count; i++ {
 			m.vimDeleteCharUnderCursor()
 		}
 	case "X":
+		m.snapshotUndo()
 		for i := 0; i < count; i++ {
 			if m.col > 0 {
 				m.SetCursorColumn(m.col - 1)
@@ -216,8 +317,17 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 	case "r":
 		m.vim.pendingOp = 'r'
 	case "~":
+		m.snapshotUndo()
 		for i := 0; i < count; i++ {
 			m.vimToggleCaseUnderCursor()
+		}
+	case "u":
+		if s := m.undo.undo(m.currentSnapshot()); s != nil {
+			m.restoreSnapshot(s)
+		}
+	case "ctrl+r":
+		if s := m.undo.redo(m.currentSnapshot()); s != nil {
+			m.restoreSnapshot(s)
 		}
 	}
 }

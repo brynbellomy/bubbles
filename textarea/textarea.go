@@ -356,6 +356,7 @@ type Model struct {
 	// Vim-mode state. Only meaningful when vimEnabled is true.
 	vimEnabled bool
 	vim        vimState
+	undo       undoStack
 }
 
 // New creates a new model with default settings.
@@ -474,8 +475,10 @@ func (m *Model) SetVimEnabled(enabled bool) {
 	m.vimEnabled = enabled
 	if enabled {
 		m.vim = vimState{mode: ModeNormal}
+		m.undo = undoStack{capacity: defaultUndoCapacity}
 	} else {
 		m.vim = vimState{mode: ModeInsert}
+		m.undo = undoStack{}
 	}
 }
 

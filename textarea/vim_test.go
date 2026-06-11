@@ -428,3 +428,59 @@ func TestVim_InsertEntries(t *testing.T) {
 		})
 	}
 }
+
+func TestVim_Undo(t *testing.T) {
+	t.Run("u reverts x", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('x'))
+		if m.Value() != "ello" {
+			t.Fatalf("post-x: got %q", m.Value())
+		}
+		m, _ = m.Update(keyPress('u'))
+		if m.Value() != "hello" {
+			t.Fatalf("post-u: got %q", m.Value())
+		}
+	})
+	t.Run("Ctrl-r redoes", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('x'))
+		m, _ = m.Update(keyPress('u'))
+		m, _ = m.Update(keyCtrl('r'))
+		if m.Value() != "ello" {
+			t.Fatalf("post-redo: got %q", m.Value())
+		}
+	})
+	t.Run("edit after undo truncates redo", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("abcdef")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('x')) // bcdef
+		m, _ = m.Update(keyPress('u')) // abcdef
+		m, _ = m.Update(keyPress('x')) // bcdef (new edit)
+		m, _ = m.Update(keyCtrl('r'))  // no-op
+		if m.Value() != "bcdef" {
+			t.Fatalf("got %q want bcdef", m.Value())
+		}
+	})
+	t.Run("Insert session is one undo step", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a")
+		m.SetCursorColumn(1)
+		// Enter insert via 'a', type "bc", Esc.
+		m, _ = m.Update(keyPress('a')) // append: mode Insert
+		m, _ = m.Update(keyPress('b'))
+		m, _ = m.Update(keyPress('c'))
+		m, _ = m.Update(keyEsc())
+		if m.Value() != "abc" {
+			t.Fatalf("post-insert: got %q want abc", m.Value())
+		}
+		m, _ = m.Update(keyPress('u'))
+		if m.Value() != "a" {
+			t.Fatalf("post-undo: got %q want a", m.Value())
+		}
+	})
+}
