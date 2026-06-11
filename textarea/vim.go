@@ -168,6 +168,31 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vimFindRepeat(false)
 	case ",":
 		m.vimFindRepeat(true)
+	case "i":
+		m.vim.mode = ModeInsert
+	case "I":
+		m.vimMotionFirstNonBlank()
+		m.vim.mode = ModeInsert
+	case "a":
+		// `a` moves cursor right by 1 (past cursor), then enters Insert. The
+		// Normal-mode cap (n-1) doesn't apply once we're in Insert — we want
+		// to be able to append past the last char.
+		if m.col < len(m.value[m.row]) {
+			m.SetCursorColumn(m.col + 1)
+		}
+		m.vim.mode = ModeInsert
+	case "A":
+		m.SetCursorColumn(len(m.value[m.row]))
+		m.vim.mode = ModeInsert
+	case "o":
+		m.vimOpenLineBelow()
+		m.vim.mode = ModeInsert
+	case "O":
+		m.vimOpenLineAbove()
+		m.vim.mode = ModeInsert
+	case "s":
+		m.vimDeleteCharUnderCursor()
+		m.vim.mode = ModeInsert
 	}
 }
 
@@ -284,6 +309,30 @@ func (m *Model) vimMotionFirstNonBlank() {
 		col++
 	}
 	m.SetCursorColumn(col)
+}
+
+// vimOpenLineBelow inserts a blank line after m.row and parks the cursor on it.
+func (m *Model) vimOpenLineBelow() {
+	m.SetCursorColumn(len(m.value[m.row]))
+	m.splitLine(m.row, m.col)
+}
+
+// vimOpenLineAbove inserts a blank line before m.row and parks the cursor on it.
+func (m *Model) vimOpenLineAbove() {
+	m.SetCursorColumn(0)
+	m.splitLine(m.row, 0)
+	m.row--
+}
+
+// vimDeleteCharUnderCursor removes value[row][col] (no-op on empty line).
+func (m *Model) vimDeleteCharUnderCursor() {
+	if len(m.value[m.row]) == 0 || m.col >= len(m.value[m.row]) {
+		return
+	}
+	m.value[m.row] = append(m.value[m.row][:m.col], m.value[m.row][m.col+1:]...)
+	if m.col > len(m.value[m.row]) {
+		m.SetCursorColumn(len(m.value[m.row]))
+	}
 }
 
 // vimMotionLineEnd is `$` — cursor on last char of line, not past.

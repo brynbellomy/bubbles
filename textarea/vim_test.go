@@ -327,3 +327,45 @@ func TestVim_Counts(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_InsertEntries(t *testing.T) {
+	type tc struct {
+		name      string
+		seed      string
+		row, col  int
+		key       rune
+		afterMode VimMode
+		wantRow   int
+		wantCol   int
+		wantValue string // "" means unchanged
+	}
+	cases := []tc{
+		{"i enters insert at cursor", "hello", 0, 2, 'i', ModeInsert, 0, 2, ""},
+		{"a moves right then insert", "hello", 0, 2, 'a', ModeInsert, 0, 3, ""},
+		{"I goes to first non-blank", "  hi", 0, 3, 'I', ModeInsert, 0, 2, ""},
+		{"A goes to end of line", "hi", 0, 0, 'A', ModeInsert, 0, 2, ""},
+		{"o opens line below", "a\nb", 0, 0, 'o', ModeInsert, 1, 0, "a\n\nb"},
+		{"O opens line above", "a\nb", 1, 0, 'O', ModeInsert, 1, 0, "a\n\nb"},
+		{"s deletes char and inserts", "hello", 0, 1, 's', ModeInsert, 0, 1, "hllo"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := newTextArea()
+			m.SetValue(c.seed)
+			m.row = c.row
+			m.SetCursorColumn(c.col)
+			m.SetVimEnabled(true)
+			m, _ = m.Update(keyPress(c.key))
+			if m.VimMode() != c.afterMode {
+				t.Fatalf("mode: got %v want %v", m.VimMode(), c.afterMode)
+			}
+			if m.Line() != c.wantRow || m.Column() != c.wantCol {
+				t.Fatalf("pos: got row=%d col=%d want row=%d col=%d",
+					m.Line(), m.Column(), c.wantRow, c.wantCol)
+			}
+			if c.wantValue != "" && m.Value() != c.wantValue {
+				t.Fatalf("value: got %q want %q", m.Value(), c.wantValue)
+			}
+		})
+	}
+}
