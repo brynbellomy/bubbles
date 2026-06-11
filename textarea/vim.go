@@ -285,16 +285,63 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		op := m.vim.pendingOp
 		m.vim.pendingOp = 0
 		s := msg.String()
+		// Digit after operator (e.g. d3w) — accumulate into count and keep
+		// the operator pending.
+		if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
+			m.vim.pendingOp = op
+			m.vim.pendingCount = m.vim.pendingCount*10 + int(s[0]-'0')
+			if m.vim.pendingCount > vimMaxCount {
+				m.vim.pendingCount = vimMaxCount
+			}
+			return
+		}
+		if s == "0" && m.vim.pendingCount > 0 {
+			m.vim.pendingOp = op
+			m.vim.pendingCount = m.vim.pendingCount * 10
+			if m.vim.pendingCount > vimMaxCount {
+				m.vim.pendingCount = vimMaxCount
+			}
+			return
+		}
 		// Linewise: doubled letter (dd/cc/yy).
 		if string(op) == s {
+			count := m.vim.pendingCount
+			if count == 0 {
+				count = 1
+			}
+			m.vim.pendingCount = 0
 			m.snapshotUndo()
-			m.vimYankCurrentLine()
+			startRow := m.row
+			endRow := m.row + count - 1
+			if endRow >= len(m.value) {
+				endRow = len(m.value) - 1
+			}
+			// Yank the affected lines.
+			var parts []string
+			for r := startRow; r <= endRow; r++ {
+				parts = append(parts, string(m.value[r]))
+			}
+			m.vim.yankBuf = strings.Join(parts, "\n")
+			m.vim.yankLinewise = true
 			if op == 'c' {
+				// cc: clear the current line and enter Insert regardless of count.
 				m.vimClearCurrentLine()
 				m.vim.mode = ModeInsert
 			} else if op == 'd' {
-				m.vimDeleteCurrentLine()
+				// Delete startRow..endRow inclusive.
+				if startRow == 0 && endRow == len(m.value)-1 {
+					m.value = [][]rune{nil}
+					m.row = 0
+					m.SetCursorColumn(0)
+				} else {
+					m.value = append(m.value[:startRow], m.value[endRow+1:]...)
+					if m.row >= len(m.value) {
+						m.row = len(m.value) - 1
+					}
+					m.SetCursorColumn(0)
+				}
 			}
+			// yy with count yanks without mutation.
 			return
 		}
 		// Text object qualifier ('i' or 'a') — wait for object key.
@@ -303,15 +350,46 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			m.vim.pendingOp = op // keep op for the pendingObject branch
 			return
 		}
-		// Motion-based op.
-		r1, c1, r2, c2, _, ok := m.vimMotionRange(s, 1)
+		// Motion-based op — consume any pending count for the motion.
+		count := m.vim.pendingCount
+		if count == 0 {
+			count = 1
+		}
+		m.vim.pendingCount = 0
+		r1, c1, r2, c2, linewise, ok := m.vimMotionRange(s, count)
 		if !ok {
 			return
 		}
 		m.snapshotUndo()
-		m.vimYankRange(r1, c1, r2, c2)
-		if op != 'y' {
-			m.vimDeleteRange(r1, c1, r2, c2)
+		if linewise {
+			// Linewise motion — convert to row-range delete/yank.
+			if r1 > r2 {
+				r1, r2 = r2, r1
+			}
+			var parts []string
+			for r := r1; r <= r2; r++ {
+				parts = append(parts, string(m.value[r]))
+			}
+			m.vim.yankBuf = strings.Join(parts, "\n")
+			m.vim.yankLinewise = true
+			if op != 'y' {
+				if r1 == 0 && r2 == len(m.value)-1 {
+					m.value = [][]rune{nil}
+					m.row = 0
+					m.SetCursorColumn(0)
+				} else {
+					m.value = append(m.value[:r1], m.value[r2+1:]...)
+					if m.row >= len(m.value) {
+						m.row = len(m.value) - 1
+					}
+					m.SetCursorColumn(0)
+				}
+			}
+		} else {
+			m.vimYankRange(r1, c1, r2, c2)
+			if op != 'y' {
+				m.vimDeleteRange(r1, c1, r2, c2)
+			}
 		}
 		if op == 'c' {
 			m.vim.mode = ModeInsert
@@ -323,7 +401,13 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		op := m.vim.pendingOp
 		m.vim.pendingOp = 0
 		s := msg.String()
-		r1, c1, r2, c2, _, ok := m.vimMotionRange(s, 1)
+		// Use any pending count for the motion.
+		count := m.vim.pendingCount
+		if count == 0 {
+			count = 1
+		}
+		m.vim.pendingCount = 0
+		r1, c1, r2, c2, _, ok := m.vimMotionRange(s, count)
 		if !ok {
 			return
 		}
@@ -350,7 +434,8 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
-	count := m.vim.pendingCount
+	rawCount := m.vim.pendingCount // 0 means "no count typed yet"
+	count := rawCount
 	if count == 0 {
 		count = 1
 	}
@@ -405,6 +490,7 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vimMotionLineEnd()
 	case "g":
 		m.vim.pendingOp = 'g'
+		m.vim.pendingCount = rawCount
 	case "G":
 		if count > 1 {
 			m.row = clamp(count-1, 0, len(m.value)-1)
@@ -459,23 +545,51 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vim.mode = ModeInsert
 	case "x":
 		m.snapshotUndo()
+		var xBuf strings.Builder
 		for i := 0; i < count; i++ {
+			if m.col >= len(m.value[m.row]) {
+				break
+			}
+			xBuf.WriteRune(m.value[m.row][m.col])
 			m.vimDeleteCharUnderCursor()
+		}
+		if xBuf.Len() > 0 {
+			m.vim.yankBuf = xBuf.String()
+			m.vim.yankLinewise = false
 		}
 	case "X":
 		m.snapshotUndo()
+		var xBuf strings.Builder
 		for i := 0; i < count; i++ {
-			if m.col > 0 {
-				m.SetCursorColumn(m.col - 1)
-				m.vimDeleteCharUnderCursor()
+			if m.col == 0 {
+				break
 			}
+			m.SetCursorColumn(m.col - 1)
+			xBuf.WriteRune(m.value[m.row][m.col])
+			m.vimDeleteCharUnderCursor()
+		}
+		if xBuf.Len() > 0 {
+			// X collects chars in reverse order of deletion; reverse to restore
+			// original left-to-right order.
+			runes := []rune(xBuf.String())
+			for i, j := 0, len(runes)-1; i < j; i, j = i+1, j-1 {
+				runes[i], runes[j] = runes[j], runes[i]
+			}
+			m.vim.yankBuf = string(runes)
+			m.vim.yankLinewise = false
 		}
 	case "d":
 		m.vim.pendingOp = 'd'
+		// Carry any pre-operator count forward so the motion can use it
+		// (e.g. 3dw). If no count was typed, leave pendingCount at 0 so
+		// a count typed after the operator (d3w) accumulates normally.
+		m.vim.pendingCount = rawCount
 	case "c":
 		m.vim.pendingOp = 'c'
+		m.vim.pendingCount = rawCount
 	case "y":
 		m.vim.pendingOp = 'y'
+		m.vim.pendingCount = rawCount
 	case "D":
 		m.snapshotUndo()
 		m.vimYankToEOL()
@@ -956,6 +1070,24 @@ func (m *Model) vimMotionRange(s string, count int) (r1, c1, r2, c2 int, linewis
 		m.vimMotionLineEnd()
 		// `$` is inclusive — bump.
 		m.SetCursorColumn(m.col + 1)
+	case "j":
+		for i := 0; i < count; i++ {
+			m.CursorDown()
+		}
+		linewise = true
+	case "k":
+		for i := 0; i < count; i++ {
+			m.CursorUp()
+		}
+		linewise = true
+	case "G":
+		if count > 1 {
+			m.row = clamp(count-1, 0, len(m.value)-1)
+			m.vimMotionFirstNonBlank()
+		} else {
+			m.vimMotionLastLine()
+		}
+		linewise = true
 	default:
 		return 0, 0, 0, 0, false, false
 	}
@@ -965,7 +1097,8 @@ func (m *Model) vimMotionRange(s string, count int) (r1, c1, r2, c2 int, linewis
 	if r1 > r2 || (r1 == r2 && c1 > c2) {
 		r1, c1, r2, c2 = r2, c2, r1, c1
 	}
-	return r1, c1, r2, c2, false, true
+	ok = true
+	return
 }
 
 // vimYankRange copies the text from (r1,c1) to (r2,c2) (exclusive end) into

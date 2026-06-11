@@ -1049,3 +1049,85 @@ func TestVim_EnabledFromCol0Insert(t *testing.T) {
 		t.Fatalf("pos: got row=%d col=%d", m.Line(), m.Column())
 	}
 }
+
+func TestVim_CountedOperatorMotion(t *testing.T) {
+	t.Run("3dw deletes 3 words", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("one two three four")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('3'))
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('w'))
+		if m.Value() != "four" {
+			t.Fatalf("got %q want %q", m.Value(), "four")
+		}
+	})
+	t.Run("d3w same as 3dw", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("one two three four")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('3'))
+		m, _ = m.Update(keyPress('w'))
+		if m.Value() != "four" {
+			t.Fatalf("got %q want %q", m.Value(), "four")
+		}
+	})
+	t.Run("3dd deletes 3 lines", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc\nd\ne")
+		m.row = 1
+		m, _ = m.Update(keyPress('3'))
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('d'))
+		if m.Value() != "a\ne" {
+			t.Fatalf("got %q want %q", m.Value(), "a\ne")
+		}
+	})
+}
+
+func TestVim_xYanksToBuffer(t *testing.T) {
+	t.Run("x then p round-trips", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('x')) // delete 'h', value "ello"
+		m, _ = m.Update(keyPress('p')) // paste after cursor (col 0 → after)
+		if m.Value() != "ehllo" {
+			t.Fatalf("got %q want %q", m.Value(), "ehllo")
+		}
+	})
+	t.Run("3x yanks 3 chars", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('3'))
+		m, _ = m.Update(keyPress('x'))
+		if m.vim.yankBuf != "hel" {
+			t.Fatalf("yank: got %q want hel", m.vim.yankBuf)
+		}
+	})
+}
+
+func TestVim_LinewiseOpMotions(t *testing.T) {
+	t.Run("dj deletes current and next line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc\nd")
+		m.row = 1
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('j'))
+		if m.Value() != "a\nd" {
+			t.Fatalf("got %q want %q", m.Value(), "a\nd")
+		}
+	})
+	t.Run("dG deletes from current to last line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc\nd")
+		m.row = 1
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('G'))
+		if m.Value() != "a" {
+			t.Fatalf("got %q want %q", m.Value(), "a")
+		}
+	})
+}
