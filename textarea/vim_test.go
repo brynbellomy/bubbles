@@ -981,3 +981,37 @@ func TestVim_VisualRendering(t *testing.T) {
 		t.Fatalf("selection style not present in view; raw=%q", raw)
 	}
 }
+
+func TestVim_CursorShapes(t *testing.T) {
+	t.Run("Normal mode uses Block", func(t *testing.T) {
+		m := vimSetup(t)
+		if got := m.Styles().Cursor.Shape; got != tea.CursorBlock {
+			t.Fatalf("shape: got %v want Block", got)
+		}
+	})
+	t.Run("Insert mode uses Bar", func(t *testing.T) {
+		m := vimSetup(t)
+		m, _ = m.Update(keyPress('i'))
+		if got := m.Styles().Cursor.Shape; got != tea.CursorBar {
+			t.Fatalf("shape: got %v want Bar", got)
+		}
+	})
+	t.Run("Replace mode uses Underline", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('r'))
+		if got := m.Styles().Cursor.Shape; got != tea.CursorUnderline {
+			t.Fatalf("shape during pending r: got %v want Underline", got)
+		}
+	})
+	t.Run("disable restores original shape", func(t *testing.T) {
+		m := newTextArea()
+		original := m.Styles().Cursor.Shape
+		m.SetVimEnabled(true)
+		m.SetVimEnabled(false)
+		if got := m.Styles().Cursor.Shape; got != original {
+			t.Fatalf("shape after disable: got %v want %v", got, original)
+		}
+	})
+}

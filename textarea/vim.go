@@ -145,6 +145,7 @@ const vimMaxCount = 9999
 
 // vimUpdate handles a key press in a non-Insert vim mode.
 func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
+	defer m.applyVimCursorShape()
 	if key.Matches(msg, vimEscBinding) {
 		m.SetVimMode(ModeNormal)
 		return
@@ -221,6 +222,7 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			m.snapshotUndo()
 			m.vimReplaceCharUnderCursor(r)
 		}
+		m.vim.mode = ModeNormal
 		return
 	}
 
@@ -486,6 +488,7 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vimPaste(false) // before
 	case "r":
 		m.vim.pendingOp = 'r'
+		m.vim.mode = ModeReplace
 	case "~":
 		m.snapshotUndo()
 		for i := 0; i < count; i++ {

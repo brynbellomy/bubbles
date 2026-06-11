@@ -477,13 +477,18 @@ func (m *Model) SetVimEnabled(enabled bool) {
 	if enabled == m.vimEnabled {
 		return
 	}
-	m.vimEnabled = enabled
 	if enabled {
-		m.vim = vimState{mode: ModeNormal}
+		m.vim = vimState{mode: ModeNormal, savedCursorShape: m.styles.Cursor.Shape}
+		m.vimEnabled = true
 		m.undo = undoStack{capacity: defaultUndoCapacity}
+		m.snapshotUndo()
+		m.applyVimCursorShape()
 	} else {
+		m.styles.Cursor.Shape = m.vim.savedCursorShape
+		m.vimEnabled = false
 		m.vim = vimState{mode: ModeInsert}
 		m.undo = undoStack{}
+		m.updateVirtualCursorStyle()
 	}
 }
 
@@ -507,6 +512,26 @@ func (m *Model) SetVimMode(mode VimMode) {
 	m.vim.pendingCount = 0
 	m.vim.pendingFindKind = 0
 	m.vim.pendingObject = 0
+	m.applyVimCursorShape()
+}
+
+// applyVimCursorShape sets the cursor shape based on the current vim mode.
+// No-op if vim is not enabled.
+func (m *Model) applyVimCursorShape() {
+	if !m.vimEnabled {
+		return
+	}
+	var shape tea.CursorShape
+	switch m.vim.mode {
+	case ModeInsert:
+		shape = tea.CursorBar
+	case ModeReplace:
+		shape = tea.CursorUnderline
+	default:
+		shape = tea.CursorBlock
+	}
+	m.styles.Cursor.Shape = shape
+	m.updateVirtualCursorStyle()
 }
 
 // updateVirtualCursorStyle sets styling on the virtual cursor based on the
@@ -1293,6 +1318,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 			if m.col > 0 {
 				m.SetCursorColumn(m.col - 1)
 			}
+			m.applyVimCursorShape()
 		case key.Matches(msg, m.KeyMap.DeleteAfterCursor):
 			m.col = clamp(m.col, 0, len(m.value[m.row]))
 			if m.col >= len(m.value[m.row]) {
