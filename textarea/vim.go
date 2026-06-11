@@ -920,8 +920,55 @@ func (m *Model) vimTextObjectRange(qual rune, obj string) (r1, c1, r2, c2 int, o
 	switch obj {
 	case "w":
 		return m.vimObjectWord(inner)
+	case "\"":
+		return m.vimObjectQuote(inner, '"')
+	case "'":
+		return m.vimObjectQuote(inner, '\'')
+	case "`":
+		return m.vimObjectQuote(inner, '`')
 	}
 	return 0, 0, 0, 0, false
+}
+
+// vimObjectQuote computes i{q}/a{q} for a quote char q. Returns range on the
+// current logical line only; multi-line quoted strings are out of scope.
+func (m *Model) vimObjectQuote(inner bool, q rune) (r1, c1, r2, c2 int, ok bool) {
+	line := m.value[m.row]
+	// Find the nearest quote at or before cursor.
+	left := -1
+	for i := m.col; i >= 0; i-- {
+		if i < len(line) && line[i] == q {
+			left = i
+			break
+		}
+	}
+	if left == -1 {
+		// Try forward.
+		for i := m.col; i < len(line); i++ {
+			if line[i] == q {
+				left = i
+				break
+			}
+		}
+	}
+	if left == -1 {
+		return 0, 0, 0, 0, false
+	}
+	// Find the closing quote after left.
+	right := -1
+	for i := left + 1; i < len(line); i++ {
+		if line[i] == q {
+			right = i
+			break
+		}
+	}
+	if right == -1 {
+		return 0, 0, 0, 0, false
+	}
+	if inner {
+		return m.row, left + 1, m.row, right, true
+	}
+	return m.row, left, m.row, right + 1, true
 }
 
 // vimObjectWord computes iw/aw bounds. iw = word at cursor (no surrounding

@@ -704,3 +704,39 @@ func TestVim_TextObjectsWord(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_TextObjectsQuotes(t *testing.T) {
+	t.Run(`di" deletes inside double quotes`, func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue(`foo "bar" baz`)
+		m.SetCursorColumn(6) // inside "bar"
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('i'))
+		m, _ = m.Update(keyPress('"'))
+		if m.Value() != `foo "" baz` {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run(`da" deletes around double quotes`, func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue(`foo "bar" baz`)
+		m.SetCursorColumn(6)
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('a'))
+		m, _ = m.Update(keyPress('"'))
+		if m.Value() != `foo  baz` {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("di' deletes inside single quotes", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue(`foo 'bar' baz`)
+		m.SetCursorColumn(6)
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyPress('i'))
+		m, _ = m.Update(keyPress('\''))
+		if m.Value() != `foo '' baz` {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+}
