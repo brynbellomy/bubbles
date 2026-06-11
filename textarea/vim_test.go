@@ -127,3 +127,41 @@ func TestVim_EscFromInsertAtCol0StaysPut(t *testing.T) {
 		t.Fatalf("expected col 0 after Esc at col 0, got %d", m.Column())
 	}
 }
+
+func TestVim_WordMotions(t *testing.T) {
+	cases := []struct {
+		name, seed string
+		col        int
+		key        rune
+		wantCol    int
+	}{
+		// `w` — start of next word (alnum+_; punct is its own word).
+		{"w over alnum", "foo bar", 0, 'w', 4},
+		{"w skips punct boundary", "foo,bar", 0, 'w', 3},
+		{"w from punct to alnum", "foo,bar", 3, 'w', 4},
+		// `W` — start of next WORD (whitespace-delimited).
+		{"W skips punct", "foo,bar baz", 0, 'W', 8},
+		// `b` — start of previous word.
+		{"b from word start", "foo bar", 4, 'b', 0},
+		{"b across punct", "foo,bar", 4, 'b', 3},
+		// `B` — start of previous WORD.
+		{"B across punct", "foo,bar baz", 8, 'B', 0},
+		// `e` — end of current/next word.
+		{"e to end of word", "foo bar", 0, 'e', 2},
+		{"e from end advances", "foo bar", 2, 'e', 6},
+		// `E` — end of current/next WORD.
+		{"E spans punct", "foo,bar baz", 0, 'E', 6},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newTextArea()
+			m.SetValue(tc.seed)
+			m.SetCursorColumn(tc.col)
+			m.SetVimEnabled(true)
+			m, _ = m.Update(keyPress(tc.key))
+			if m.Column() != tc.wantCol {
+				t.Fatalf("got col=%d, want col=%d", m.Column(), tc.wantCol)
+			}
+		})
+	}
+}

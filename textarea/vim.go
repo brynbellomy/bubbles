@@ -1,6 +1,8 @@
 package textarea
 
 import (
+	"unicode"
+
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
@@ -54,7 +56,6 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
-	// Single-char dispatch for Task 2: hjkl only. Later tasks expand.
 	switch msg.String() {
 	case "h":
 		m.vimMotionCharLeft()
@@ -64,6 +65,18 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.CursorDown()
 	case "k":
 		m.CursorUp()
+	case "w":
+		m.vimMotionWordForward(vimWordClass)
+	case "W":
+		m.vimMotionWordForward(vimWORDClass)
+	case "b":
+		m.vimMotionWordBackward(vimWordClass)
+	case "B":
+		m.vimMotionWordBackward(vimWORDClass)
+	case "e":
+		m.vimMotionWordEndForward(vimWordClass)
+	case "E":
+		m.vimMotionWordEndForward(vimWORDClass)
 	}
 }
 
@@ -78,5 +91,126 @@ func (m *Model) vimMotionCharLeft() {
 func (m *Model) vimMotionCharRight() {
 	if m.col < len(m.value[m.row]) {
 		m.SetCursorColumn(m.col + 1)
+	}
+}
+
+// isVimWordChar reports whether r is part of a vim "word" (alnum or _).
+func isVimWordChar(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_'
+}
+
+// vimWordClass returns 0 for whitespace, 1 for word chars, 2 for non-word
+// non-whitespace (punct). Used to detect word-boundary transitions.
+func vimWordClass(r rune) int {
+	switch {
+	case unicode.IsSpace(r):
+		return 0
+	case isVimWordChar(r):
+		return 1
+	default:
+		return 2
+	}
+}
+
+// vimWORDClass returns 0 for whitespace, 1 for everything else.
+func vimWORDClass(r rune) int {
+	if unicode.IsSpace(r) {
+		return 0
+	}
+	return 1
+}
+
+// vimMotionWordForward implements `w`. classFn determines word vs WORD.
+func (m *Model) vimMotionWordForward(classFn func(rune) int) {
+	for {
+		line := m.value[m.row]
+		if m.col >= len(line) {
+			// End of line: descend to next line at col 0 if available, else stop.
+			if m.row >= len(m.value)-1 {
+				return
+			}
+			m.row++
+			m.SetCursorColumn(0)
+			// If next line starts with a non-whitespace char we are done.
+			if len(m.value[m.row]) > 0 && classFn(m.value[m.row][0]) != 0 {
+				return
+			}
+			continue
+		}
+		startClass := classFn(line[m.col])
+		// Step forward through chars of the same class, then skip whitespace.
+		for m.col < len(line) && classFn(line[m.col]) == startClass && startClass != 0 {
+			m.SetCursorColumn(m.col + 1)
+		}
+		for m.col < len(line) && classFn(line[m.col]) == 0 {
+			m.SetCursorColumn(m.col + 1)
+		}
+		if m.col < len(line) {
+			return
+		}
+		// Wrap to next line.
+	}
+}
+
+// vimMotionWordBackward implements `b`.
+func (m *Model) vimMotionWordBackward(classFn func(rune) int) {
+	for {
+		if m.col == 0 {
+			if m.row == 0 {
+				return
+			}
+			m.row--
+			m.SetCursorColumn(len(m.value[m.row]))
+			continue
+		}
+		line := m.value[m.row]
+		// Step back to the previous non-whitespace.
+		m.SetCursorColumn(m.col - 1)
+		for m.col > 0 && classFn(line[m.col]) == 0 {
+			m.SetCursorColumn(m.col - 1)
+		}
+		if classFn(line[m.col]) == 0 {
+			// Whole line was whitespace; loop again to previous line.
+			continue
+		}
+		startClass := classFn(line[m.col])
+		for m.col > 0 && classFn(line[m.col-1]) == startClass {
+			m.SetCursorColumn(m.col - 1)
+		}
+		return
+	}
+}
+
+// vimMotionWordEndForward implements `e`.
+func (m *Model) vimMotionWordEndForward(classFn func(rune) int) {
+	for {
+		line := m.value[m.row]
+		if m.col >= len(line)-1 || len(line) == 0 {
+			// At/past end: advance to next line if possible.
+			if m.row >= len(m.value)-1 {
+				if len(line) > 0 {
+					m.SetCursorColumn(len(line) - 1)
+				}
+				return
+			}
+			m.row++
+			m.SetCursorColumn(0)
+			continue
+		}
+		// Advance once so 'e' from end-of-word goes to next word's end.
+		m.SetCursorColumn(m.col + 1)
+		line = m.value[m.row]
+		// Skip whitespace.
+		for m.col < len(line) && classFn(line[m.col]) == 0 {
+			m.SetCursorColumn(m.col + 1)
+		}
+		if m.col >= len(line) {
+			continue
+		}
+		startClass := classFn(line[m.col])
+		for m.col < len(line)-1 && classFn(line[m.col+1]) == startClass {
+			m.SetCursorColumn(m.col + 1)
+		}
+		return
 	}
 }
