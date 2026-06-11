@@ -865,3 +865,88 @@ func TestVim_VisualEntry(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_VisualConsume(t *testing.T) {
+	t.Run("d on visual char selection deletes", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('l'))
+		m, _ = m.Update(keyPress('l'))
+		// Selection: cols 1..3 inclusive of cursor pos
+		m, _ = m.Update(keyPress('d'))
+		if m.Value() != "ho" {
+			t.Fatalf("got %q want ho", m.Value())
+		}
+		if m.VimMode() != ModeNormal {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+	})
+	t.Run("y on visual yanks", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('l'))
+		m, _ = m.Update(keyPress('y'))
+		if m.vim.yankBuf != "el" {
+			t.Fatalf("yank: got %q", m.vim.yankBuf)
+		}
+	})
+	t.Run("c on visual deletes and enters insert", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('l'))
+		m, _ = m.Update(keyPress('c'))
+		if m.VimMode() != ModeInsert {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+		if m.Value() != "hlo" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+	t.Run("o swaps anchor and cursor in visual", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('l'))
+		m, _ = m.Update(keyPress('l'))
+		// Anchor at col 1, cursor at col 3.
+		m, _ = m.Update(keyPress('o'))
+		if m.Column() != 1 {
+			t.Fatalf("cursor: got %d want 1", m.Column())
+		}
+		if m.vim.selStartCol != 3 {
+			t.Fatalf("anchor: got %d want 3", m.vim.selStartCol)
+		}
+	})
+	t.Run("~ toggles case across visual", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('l'))
+		m, _ = m.Update(keyPress('l'))
+		m, _ = m.Update(keyPress('~'))
+		if m.Value() != "HELlo" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.VimMode() != ModeNormal {
+			t.Fatalf("mode: got %v", m.VimMode())
+		}
+	})
+	t.Run("V d on visual line deletes whole line", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc")
+		m.row = 1
+		m, _ = m.Update(keyPress('V'))
+		m, _ = m.Update(keyPress('d'))
+		if m.Value() != "a\nc" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+}

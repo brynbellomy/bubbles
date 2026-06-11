@@ -149,6 +149,70 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
+	// Visual-mode operators consume the selection immediately.
+	if m.vim.mode == ModeVisualChar || m.vim.mode == ModeVisualLine {
+		switch msg.String() {
+		case "d", "x":
+			m.snapshotUndo()
+			r1, c1, r2, c2 := m.vimVisualRange()
+			m.vimYankRange(r1, c1, r2, c2)
+			m.vim.yankLinewise = m.vim.mode == ModeVisualLine
+			m.vimDeleteRange(r1, c1, r2, c2)
+			m.vim.mode = ModeNormal
+			return
+		case "y":
+			r1, c1, r2, c2 := m.vimVisualRange()
+			m.vimYankRange(r1, c1, r2, c2)
+			m.vim.yankLinewise = m.vim.mode == ModeVisualLine
+			m.row = r1
+			m.SetCursorColumn(c1)
+			m.vim.mode = ModeNormal
+			return
+		case "c":
+			m.snapshotUndo()
+			r1, c1, r2, c2 := m.vimVisualRange()
+			m.vimYankRange(r1, c1, r2, c2)
+			m.vim.yankLinewise = m.vim.mode == ModeVisualLine
+			m.vimDeleteRange(r1, c1, r2, c2)
+			m.vim.mode = ModeInsert
+			return
+		case "~":
+			m.snapshotUndo()
+			r1, c1, r2, c2 := m.vimVisualRange()
+			// Toggle case across range.
+			for r := r1; r <= r2; r++ {
+				line := m.value[r]
+				start := 0
+				end := len(line)
+				if r == r1 {
+					start = c1
+				}
+				if r == r2 {
+					end = c2
+				}
+				if end > len(line) {
+					end = len(line)
+				}
+				for i := start; i < end; i++ {
+					switch {
+					case unicode.IsUpper(line[i]):
+						line[i] = unicode.ToLower(line[i])
+					case unicode.IsLower(line[i]):
+						line[i] = unicode.ToUpper(line[i])
+					}
+				}
+			}
+			m.vim.mode = ModeNormal
+			return
+		case "o":
+			m.row, m.vim.selStartRow = m.vim.selStartRow, m.row
+			c := m.col
+			m.SetCursorColumn(m.vim.selStartCol)
+			m.vim.selStartCol = c
+			return
+		}
+	}
+
 	// Pending r{c} — next char replaces the char under cursor.
 	if m.vim.pendingOp == 'r' {
 		m.vim.pendingOp = 0
@@ -1138,6 +1202,37 @@ func (m *Model) vimObjectWord(inner bool) (r1, c1, r2, c2 int, ok bool) {
 		}
 	}
 	return m.row, start, m.row, end, true
+}
+
+// vimVisualRange returns the normalized range covered by the current visual
+// selection. For ModeVisualChar the range is end-exclusive at c2 (includes the
+// char under cursor). For ModeVisualLine the range covers whole rows including
+// the trailing newline implicitly.
+func (m *Model) vimVisualRange() (r1, c1, r2, c2 int) {
+	r1, c1 = m.vim.selStartRow, m.vim.selStartCol
+	r2, c2 = m.row, m.col
+	if m.vim.mode == ModeVisualLine {
+		if r1 > r2 {
+			r1, r2 = r2, r1
+		}
+		c1 = 0
+		// To delete whole rows including the trailing newline, target the
+		// start of the row after r2 — vimDeleteRange handles that.
+		if r2+1 < len(m.value) {
+			c2 = 0
+			r2 = r2 + 1
+		} else {
+			c2 = len(m.value[r2])
+		}
+		return
+	}
+	// Normalize char range and make end inclusive (vim selection includes the
+	// char under cursor), so bump c2 by 1.
+	if r1 > r2 || (r1 == r2 && c1 > c2) {
+		r1, c1, r2, c2 = r2, c2, r1, c1
+	}
+	c2++
+	return
 }
 
 // vimApplyCase transforms case across a range.
