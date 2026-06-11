@@ -352,6 +352,10 @@ type Model struct {
 
 	// rune sanitizer for input.
 	rsan runeutil.Sanitizer
+
+	// Vim-mode state. Only meaningful when vimEnabled is true.
+	vimEnabled bool
+	vim        vimState
 }
 
 // New creates a new model with default settings.
@@ -453,6 +457,47 @@ func (m Model) VirtualCursor() bool {
 func (m *Model) SetVirtualCursor(v bool) {
 	m.useVirtualCursor = v
 	m.updateVirtualCursorStyle()
+}
+
+// VimEnabled reports whether vim modal keybindings are active.
+func (m Model) VimEnabled() bool {
+	return m.vimEnabled
+}
+
+// SetVimEnabled toggles vim modal keybindings. When enabled, the textarea
+// starts in [ModeNormal]; when disabled, it returns to [ModeInsert] and all
+// vim state (selection, pending operator, undo stack) is cleared.
+func (m *Model) SetVimEnabled(enabled bool) {
+	if enabled == m.vimEnabled {
+		return
+	}
+	m.vimEnabled = enabled
+	if enabled {
+		m.vim = vimState{mode: ModeNormal}
+	} else {
+		m.vim = vimState{mode: ModeInsert}
+	}
+}
+
+// VimMode returns the current vim mode. Always [ModeInsert] when vim is
+// disabled.
+func (m Model) VimMode() VimMode {
+	if !m.vimEnabled {
+		return ModeInsert
+	}
+	return m.vim.mode
+}
+
+// SetVimMode forces an immediate transition to the given mode. Clears any
+// pending operator, count, or find prompt. No-op if vim is not enabled.
+func (m *Model) SetVimMode(mode VimMode) {
+	if !m.vimEnabled {
+		return
+	}
+	m.vim.mode = mode
+	m.vim.pendingOp = 0
+	m.vim.pendingCount = 0
+	m.vim.pendingFindKind = 0
 }
 
 // updateVirtualCursorStyle sets styling on the virtual cursor based on the
@@ -1223,6 +1268,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case tea.PasteMsg:
 		m.insertRunesFromUserInput([]rune(msg.Content))
 	case tea.KeyPressMsg:
+		if m.vimEnabled && m.vim.mode != ModeInsert {
+			m.vimUpdate(msg)
+			break
+		}
 		switch {
 		case key.Matches(msg, m.KeyMap.DeleteAfterCursor):
 			m.col = clamp(m.col, 0, len(m.value[m.row]))
