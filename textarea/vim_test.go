@@ -328,6 +328,65 @@ func TestVim_Counts(t *testing.T) {
 	})
 }
 
+func TestVim_CharEdits(t *testing.T) {
+	t.Run("x deletes char under cursor", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('x'))
+		if m.Value() != "hllo" {
+			t.Fatalf("got %q want %q", m.Value(), "hllo")
+		}
+	})
+	t.Run("X deletes char before cursor", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(2)
+		m, _ = m.Update(keyPress('X'))
+		if m.Value() != "hllo" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.Column() != 1 {
+			t.Fatalf("col: got %d want 1", m.Column())
+		}
+	})
+	t.Run("r replaces char", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('r'))
+		m, _ = m.Update(keyPress('a'))
+		if m.Value() != "hallo" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.VimMode() != ModeNormal {
+			t.Fatalf("mode: got %v want Normal", m.VimMode())
+		}
+	})
+	t.Run("~ toggles case and advances", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('~'))
+		if m.Value() != "Hello" {
+			t.Fatalf("got %q", m.Value())
+		}
+		if m.Column() != 1 {
+			t.Fatalf("col: got %d want 1", m.Column())
+		}
+	})
+	t.Run("3x deletes 3 chars", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(1)
+		m, _ = m.Update(keyPress('3'))
+		m, _ = m.Update(keyPress('x'))
+		if m.Value() != "ho" {
+			t.Fatalf("got %q", m.Value())
+		}
+	})
+}
+
 func TestVim_InsertEntries(t *testing.T) {
 	type tc struct {
 		name      string

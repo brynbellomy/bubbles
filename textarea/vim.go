@@ -56,6 +56,15 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
+	// Pending r{c} — next char replaces the char under cursor.
+	if m.vim.pendingOp == 'r' {
+		m.vim.pendingOp = 0
+		if r, ok := singleRune(msg); ok {
+			m.vimReplaceCharUnderCursor(r)
+		}
+		return
+	}
+
 	if m.vim.pendingFindKind != 0 {
 		kind := m.vim.pendingFindKind
 		m.vim.pendingFindKind = 0
@@ -193,6 +202,23 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 	case "s":
 		m.vimDeleteCharUnderCursor()
 		m.vim.mode = ModeInsert
+	case "x":
+		for i := 0; i < count; i++ {
+			m.vimDeleteCharUnderCursor()
+		}
+	case "X":
+		for i := 0; i < count; i++ {
+			if m.col > 0 {
+				m.SetCursorColumn(m.col - 1)
+				m.vimDeleteCharUnderCursor()
+			}
+		}
+	case "r":
+		m.vim.pendingOp = 'r'
+	case "~":
+		for i := 0; i < count; i++ {
+			m.vimToggleCaseUnderCursor()
+		}
 	}
 }
 
@@ -408,6 +434,31 @@ func (m *Model) vimFindChar(kind rune, ch rune) {
 				return
 			}
 		}
+	}
+}
+
+// vimReplaceCharUnderCursor overwrites value[row][col] with r (no-op on empty line).
+func (m *Model) vimReplaceCharUnderCursor(r rune) {
+	if len(m.value[m.row]) == 0 || m.col >= len(m.value[m.row]) {
+		return
+	}
+	m.value[m.row][m.col] = r
+}
+
+// vimToggleCaseUnderCursor flips the case of value[row][col] and advances the cursor.
+func (m *Model) vimToggleCaseUnderCursor() {
+	if len(m.value[m.row]) == 0 || m.col >= len(m.value[m.row]) {
+		return
+	}
+	r := m.value[m.row][m.col]
+	switch {
+	case unicode.IsUpper(r):
+		m.value[m.row][m.col] = unicode.ToLower(r)
+	case unicode.IsLower(r):
+		m.value[m.row][m.col] = unicode.ToUpper(r)
+	}
+	if m.col < len(m.value[m.row])-1 {
+		m.SetCursorColumn(m.col + 1)
 	}
 }
 
