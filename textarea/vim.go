@@ -56,6 +56,17 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
+	// Pending find target (f/F/t/T waiting for next char).
+	if m.vim.pendingFindKind != 0 {
+		kind := m.vim.pendingFindKind
+		m.vim.pendingFindKind = 0
+		if r, ok := singleRune(msg); ok {
+			m.vimFindChar(kind, r)
+			m.vim.lastFind = vimFind{kind: kind, ch: r}
+		}
+		return
+	}
+
 	// Pending `g` prefix (for gg). gu/gU come in Task 17.
 	if m.vim.pendingOp == 'g' {
 		m.vim.pendingOp = 0
@@ -96,6 +107,18 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vim.pendingOp = 'g'
 	case "G":
 		m.vimMotionLastLine()
+	case "f":
+		m.vim.pendingFindKind = 'f'
+	case "F":
+		m.vim.pendingFindKind = 'F'
+	case "t":
+		m.vim.pendingFindKind = 't'
+	case "T":
+		m.vim.pendingFindKind = 'T'
+	case ";":
+		m.vimFindRepeat(false)
+	case ",":
+		m.vimFindRepeat(true)
 	}
 }
 
@@ -234,6 +257,80 @@ func (m *Model) vimMotionLastLine() {
 	m.row = len(m.value) - 1
 	m.vimMotionFirstNonBlank()
 	m.repositionView()
+}
+
+// singleRune extracts the single literal rune from a KeyPressMsg, if any.
+// Returns ok=false for special keys (Esc, arrows, etc.).
+func singleRune(msg tea.KeyPressMsg) (rune, bool) {
+	if len(msg.Text) == 1 {
+		return rune(msg.Text[0]), true
+	}
+	// Text may be empty for synthesized rune key events from tests.
+	if msg.Code != 0 && msg.Code < 0x110000 {
+		r := rune(msg.Code)
+		if r >= 0x20 && r <= 0x7e {
+			return r, true
+		}
+	}
+	return 0, false
+}
+
+// vimFindChar searches the current line for ch in the given direction. For
+// 'f'/'F', cursor lands on the match. For 't'/'T', cursor lands one before
+// (forward) or one after (backward).
+func (m *Model) vimFindChar(kind rune, ch rune) {
+	line := m.value[m.row]
+	switch kind {
+	case 'f':
+		for i := m.col + 1; i < len(line); i++ {
+			if line[i] == ch {
+				m.SetCursorColumn(i)
+				return
+			}
+		}
+	case 't':
+		for i := m.col + 1; i < len(line); i++ {
+			if line[i] == ch {
+				m.SetCursorColumn(i - 1)
+				return
+			}
+		}
+	case 'F':
+		for i := m.col - 1; i >= 0; i-- {
+			if line[i] == ch {
+				m.SetCursorColumn(i)
+				return
+			}
+		}
+	case 'T':
+		for i := m.col - 1; i >= 0; i-- {
+			if line[i] == ch {
+				m.SetCursorColumn(i + 1)
+				return
+			}
+		}
+	}
+}
+
+// vimFindRepeat repeats the last find. reverse swaps direction.
+func (m *Model) vimFindRepeat(reverse bool) {
+	if m.vim.lastFind.kind == 0 {
+		return
+	}
+	kind := m.vim.lastFind.kind
+	if reverse {
+		switch kind {
+		case 'f':
+			kind = 'F'
+		case 'F':
+			kind = 'f'
+		case 't':
+			kind = 'T'
+		case 'T':
+			kind = 't'
+		}
+	}
+	m.vimFindChar(kind, m.vim.lastFind.ch)
 }
 
 // vimMotionWordEndForward implements `e`.

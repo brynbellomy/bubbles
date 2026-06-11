@@ -177,6 +177,52 @@ func TestVim_LineMotions(t *testing.T) {
 	})
 }
 
+func TestVim_FindMotions(t *testing.T) {
+	cases := []struct {
+		name string
+		seq  []rune
+		col  int
+		want int
+	}{
+		{"f finds char forward", []rune{'f', 'r'}, 0, 8}, // "hello world" → 'r' at 8
+		{"F finds char backward", []rune{'F', 'l'}, 9, 3},
+		{"t lands one before forward", []rune{'t', 'r'}, 0, 7},
+		{"T lands one after backward", []rune{'T', 'l'}, 9, 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := vimSetup(t)
+			m.SetValue("hello world")
+			m.SetCursorColumn(tc.col)
+			for _, r := range tc.seq {
+				m, _ = m.Update(keyPress(r))
+			}
+			if m.Column() != tc.want {
+				t.Fatalf("got col=%d, want col=%d", m.Column(), tc.want)
+			}
+		})
+	}
+}
+
+func TestVim_FindRepeat(t *testing.T) {
+	m := vimSetup(t)
+	m.SetValue("a.b.c.d")
+	m.SetCursorColumn(0)
+	m, _ = m.Update(keyPress('f'))
+	m, _ = m.Update(keyPress('.'))
+	if m.Column() != 1 {
+		t.Fatalf("first f: got col=%d, want 1", m.Column())
+	}
+	m, _ = m.Update(keyPress(';'))
+	if m.Column() != 3 {
+		t.Fatalf("; got col=%d, want 3", m.Column())
+	}
+	m, _ = m.Update(keyPress(','))
+	if m.Column() != 1 {
+		t.Fatalf(", got col=%d, want 1", m.Column())
+	}
+}
+
 func TestVim_WordMotions(t *testing.T) {
 	cases := []struct {
 		name, seed string
