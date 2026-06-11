@@ -1,3 +1,10 @@
+// Package textarea — vim modal keybindings (opt-in).
+//
+// This file implements opt-in vim modal keybindings for the textarea. The
+// surface covers Normal / Insert / Visual / Replace modes, motions, operators
+// over motions, text objects, counts, and a single unnamed yank register.
+// Marks, macros, named registers, search, and block visual are out of scope.
+// See docs/superpowers/specs/2026-06-10-textarea-vim-keybindings-design.md.
 package textarea
 
 import (

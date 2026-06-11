@@ -1015,3 +1015,37 @@ func TestVim_CursorShapes(t *testing.T) {
 		}
 	})
 }
+
+func TestVim_SetVimModeProgrammatic(t *testing.T) {
+	m := vimSetup(t)
+	m.SetVimMode(ModeInsert)
+	if m.VimMode() != ModeInsert {
+		t.Fatalf("mode: got %v", m.VimMode())
+	}
+	if m.Styles().Cursor.Shape != tea.CursorBar {
+		t.Fatalf("shape: got %v want Bar", m.Styles().Cursor.Shape)
+	}
+	m.SetVimMode(ModeNormal)
+	if m.VimMode() != ModeNormal {
+		t.Fatalf("mode: got %v", m.VimMode())
+	}
+}
+
+func TestVim_DisabledIgnoresSetVimMode(t *testing.T) {
+	m := newTextArea()
+	m.SetVimMode(ModeNormal) // disabled — no-op
+	if m.VimMode() != ModeInsert {
+		t.Fatalf("mode: got %v want Insert (vim disabled)", m.VimMode())
+	}
+}
+
+func TestVim_EnabledFromCol0Insert(t *testing.T) {
+	// Regression: enabling vim while focus is at col 0 must NOT corrupt cursor.
+	m := newTextArea()
+	m.SetValue("hello")
+	m.SetCursorColumn(0)
+	m.SetVimEnabled(true)
+	if m.Column() != 0 || m.Line() != 0 {
+		t.Fatalf("pos: got row=%d col=%d", m.Line(), m.Column())
+	}
+}
