@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
 )
 
 // VimMode identifies which vim mode the textarea is currently in.
@@ -1258,4 +1259,74 @@ func (m *Model) vimApplyCase(r1, c1, r2, c2 int, upper bool) {
 			line[i] = transform(line[i])
 		}
 	}
+}
+
+// vimVisualRangeForRender returns the inclusive selection range for rendering.
+// For VisualChar, c2 is exclusive of one past the cursor. For VisualLine,
+// c1=0 and c2=len(value[r2]). ok=false if not in visual mode.
+func (m *Model) vimVisualRangeForRender() (r1, c1, r2, c2 int, ok bool) {
+	if !m.vimEnabled {
+		return
+	}
+	if m.vim.mode != ModeVisualChar && m.vim.mode != ModeVisualLine {
+		return
+	}
+	r1, c1 = m.vim.selStartRow, m.vim.selStartCol
+	r2, c2 = m.row, m.col
+	if m.vim.mode == ModeVisualLine {
+		if r1 > r2 {
+			r1, r2 = r2, r1
+		}
+		c1 = 0
+		c2 = len(m.value[r2])
+		return r1, c1, r2, c2, true
+	}
+	if r1 > r2 || (r1 == r2 && c1 > c2) {
+		r1, c1, r2, c2 = r2, c2, r1, c1
+	}
+	// Make c2 inclusive of cursor char.
+	c2++
+	ok = true
+	return
+}
+
+// renderWrappedLineWithSelection renders a wrapped line, splicing selection
+// styling where the visual selection intersects.
+func (m *Model) renderWrappedLineWithSelection(
+	wrappedLine []rune,
+	logicalRow int,
+	wrappedStart int,
+	baseStyle lipgloss.Style,
+) string {
+	selR1, selC1, selR2, selC2, ok := m.vimVisualRangeForRender()
+	if !ok || logicalRow < selR1 || logicalRow > selR2 {
+		return baseStyle.Render(string(wrappedLine))
+	}
+	styles := m.activeStyle()
+	selStyle := styles.computedSelectedText().Inherit(baseStyle)
+
+	start := 0
+	end := len(wrappedLine)
+	if logicalRow == selR1 {
+		start = max(0, selC1-wrappedStart)
+	}
+	if logicalRow == selR2 {
+		end = min(len(wrappedLine), selC2-wrappedStart)
+		if end < 0 {
+			end = 0
+		}
+	}
+	if start >= end {
+		return baseStyle.Render(string(wrappedLine))
+	}
+
+	var b strings.Builder
+	if start > 0 {
+		b.WriteString(baseStyle.Render(string(wrappedLine[:start])))
+	}
+	b.WriteString(selStyle.Render(string(wrappedLine[start:end])))
+	if end < len(wrappedLine) {
+		b.WriteString(baseStyle.Render(string(wrappedLine[end:])))
+	}
+	return b.String()
 }

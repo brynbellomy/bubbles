@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	lipgloss "charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // keyEsc returns a synthesized Esc KeyPressMsg.
@@ -949,4 +951,33 @@ func TestVim_VisualConsume(t *testing.T) {
 			t.Fatalf("got %q", m.Value())
 		}
 	})
+}
+
+func TestVim_VisualRendering(t *testing.T) {
+	m := vimSetup(t)
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(20)
+	// Apply a recognizable background to the selection.
+	st := m.Styles()
+	st.Focused.SelectedText = lipgloss.NewStyle().Background(lipgloss.Color("99"))
+	m.SetStyles(st)
+
+	m.SetValue("hello world")
+	m.SetCursorColumn(0)
+	m, _ = m.Update(keyPress('v'))
+	m, _ = m.Update(keyPress('l'))
+	m, _ = m.Update(keyPress('l'))
+	// Selection covers "hel" (cols 0..2 inclusive).
+
+	view := ansi.Strip(m.View())
+	if !strings.Contains(view, "hello world") {
+		t.Fatalf("expected text in view, got %q", view)
+	}
+	// Sanity: the styled output should include the selection style escape
+	// sequence (256-color background 99).
+	raw := m.View()
+	if !strings.Contains(raw, "48;5;99") {
+		t.Fatalf("selection style not present in view; raw=%q", raw)
+	}
 }

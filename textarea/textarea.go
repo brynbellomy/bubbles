@@ -197,10 +197,15 @@ type StyleState struct {
 	EndOfBuffer      lipgloss.Style
 	Placeholder      lipgloss.Style
 	Prompt           lipgloss.Style
+	SelectedText     lipgloss.Style // vim visual-mode selection style
 }
 
 func (s StyleState) computedCursorLine() lipgloss.Style {
 	return s.CursorLine.Inherit(s.Base).Inline(true)
+}
+
+func (s StyleState) computedSelectedText() lipgloss.Style {
+	return s.SelectedText.Inherit(s.Base).Inline(true)
 }
 
 func (s StyleState) computedCursorLineNumber() lipgloss.Style {
@@ -1475,18 +1480,26 @@ func (m *Model) view() string {
 				wrappedLine = []rune(strings.TrimSuffix(string(wrappedLine), " "))
 				padding -= m.width - strwidth
 			}
+			// Compute the column offset where this wrapped sub-line starts
+			// within the logical line. Used for selection alignment.
+			wrappedStart := 0
+			for prevWL := 0; prevWL < wl; prevWL++ {
+				wrappedStart += len(wrappedLines[prevWL])
+			}
 			if m.row == l && lineInfo.RowOffset == wl {
-				s.WriteString(style.Render(string(wrappedLine[:lineInfo.ColumnOffset])))
+				pre := wrappedLine[:lineInfo.ColumnOffset]
+				s.WriteString(m.renderWrappedLineWithSelection(pre, l, wrappedStart, style))
 				if m.col >= len(line) && lineInfo.CharOffset >= m.width {
 					m.virtualCursor.SetChar(" ")
 					s.WriteString(m.virtualCursor.View())
 				} else {
 					m.virtualCursor.SetChar(string(wrappedLine[lineInfo.ColumnOffset]))
 					s.WriteString(style.Render(m.virtualCursor.View()))
-					s.WriteString(style.Render(string(wrappedLine[lineInfo.ColumnOffset+1:])))
+					post := wrappedLine[lineInfo.ColumnOffset+1:]
+					s.WriteString(m.renderWrappedLineWithSelection(post, l, wrappedStart+lineInfo.ColumnOffset+1, style))
 				}
 			} else {
-				s.WriteString(style.Render(string(wrappedLine)))
+				s.WriteString(m.renderWrappedLineWithSelection(wrappedLine, l, wrappedStart, style))
 			}
 			s.WriteString(style.Render(strings.Repeat(" ", max(0, padding))))
 			s.WriteRune('\n')
