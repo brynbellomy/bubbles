@@ -33,8 +33,8 @@ type vimState struct {
 	mode             VimMode
 	pendingOp        rune
 	pendingCount     int
-	pendingFindKind  rune
-	lastFind         vimFind
+	pendingFindKind  rune    // active f/F/t/T prompt waiting for target char; 0 if none
+	lastFind         vimFind // last completed find, for ; and , repeat
 	selStartRow      int
 	selStartCol      int
 	yankBuf          string
@@ -45,11 +45,9 @@ type vimState struct {
 // vimEscBinding matches Esc and Ctrl-[ in both Insert and non-Insert modes.
 var vimEscBinding = key.NewBinding(key.WithKeys("esc", "ctrl+["))
 
-// vimUpdate handles a key press in a non-Insert vim mode. Returns true if the
-// key was consumed by the vim dispatcher.
-func (m *Model) vimUpdate(msg tea.KeyPressMsg) bool {
+// vimUpdate handles a key press in a non-Insert vim mode.
+func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 	// Task 1 stub: swallow everything in non-Insert modes. Later tasks fill
 	// this in with motion, operator, and text-object handling.
 	_ = msg
-	return true
 }
