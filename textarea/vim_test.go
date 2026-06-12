@@ -169,6 +169,37 @@ func TestVim_EnterMotionNormal(t *testing.T) {
 			t.Fatalf("anchor row moved: got %d want 0", m.vim.selStartRow)
 		}
 	})
+	t.Run("d<CR> deletes current line and next line (linewise)", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc\nd")
+		m.row = 1
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('d'))
+		m, _ = m.Update(keyEnter())
+		// d<CR> is dj — delete current row + next row, leaving "a\nd".
+		got := m.Value()
+		if got != "a\nd" {
+			t.Fatalf("value after d<CR>: got %q want %q", got, "a\nd")
+		}
+	})
+	t.Run("y<CR> yanks current line and next line (linewise)", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("a\nb\nc\nd")
+		m.row = 1
+		m.SetCursorColumn(0)
+		m, _ = m.Update(keyPress('y'))
+		m, _ = m.Update(keyEnter())
+		// y<CR> is yj — yank rows 1+2 linewise without mutating buffer.
+		if got := m.Value(); got != "a\nb\nc\nd" {
+			t.Fatalf("y<CR> should not mutate buffer: got %q", got)
+		}
+		if !m.vim.yankLinewise {
+			t.Fatalf("y<CR> should yank linewise")
+		}
+		if want := "b\nc"; m.vim.yankBuf != want {
+			t.Fatalf("yank buf: got %q want %q", m.vim.yankBuf, want)
+		}
+	})
 }
 
 func TestVim_EscFromInsertEntersNormal(t *testing.T) {

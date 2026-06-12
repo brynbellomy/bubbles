@@ -1077,7 +1077,10 @@ func (m *Model) vimMotionRange(s string, count int) (r1, c1, r2, c2 int, linewis
 		m.vimMotionLineEnd()
 		// `$` is inclusive — bump.
 		m.SetCursorColumn(m.col + 1)
-	case "j":
+	case "j", "enter":
+		// <CR> in operator-pending mode is an alias for `j` (linewise down).
+		// Real vim treats `d<CR>`/`c<CR>`/`y<CR>` as line-down operations,
+		// matching the behavior of `dj`/`cj`/`yj`.
 		for i := 0; i < count; i++ {
 			m.CursorDown()
 		}
