@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"charm.land/bubbles/v2/key"
+	"github.com/brynbellomy/bubbles/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"

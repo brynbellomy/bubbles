@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"charm.land/bubbles/v2/key"
+	"github.com/brynbellomy/bubbles/key"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/exp/golden"
 )

@@ -1,4 +1,4 @@
-module charm.land/bubbles/v2
+module github.com/brynbellomy/bubbles
 
 go 1.25.0
 

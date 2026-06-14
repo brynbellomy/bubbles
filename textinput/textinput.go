@@ -8,9 +8,9 @@ import (
 	"strings"
 	"unicode"
 
-	"charm.land/bubbles/v2/cursor"
-	"charm.land/bubbles/v2/internal/runeutil"
-	"charm.land/bubbles/v2/key"
+	"github.com/brynbellomy/bubbles/cursor"
+	"github.com/brynbellomy/bubbles/internal/runeutil"
+	"github.com/brynbellomy/bubbles/key"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/atotto/clipboard"

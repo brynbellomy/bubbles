@@ -3,7 +3,7 @@ package spinner_test
 import (
 	"testing"
 
-	"charm.land/bubbles/v2/spinner"
+	"github.com/brynbellomy/bubbles/spinner"
 )
 
 func TestSpinnerNew(t *testing.T) {

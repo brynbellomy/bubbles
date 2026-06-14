@@ -4,9 +4,9 @@ package table
 import (
 	"strings"
 
-	"charm.land/bubbles/v2/help"
-	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/viewport"
+	"github.com/brynbellomy/bubbles/help"
+	"github.com/brynbellomy/bubbles/key"
+	"github.com/brynbellomy/bubbles/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
