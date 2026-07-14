@@ -1,42 +1,13 @@
-// Package key provides some types and functions for generating user-definable
-// keymappings useful in Bubble Tea components. There are a few different ways
-// you can define a keymapping with this package. Here's one example:
-//
-//	type KeyMap struct {
-//	    Up key.Binding
-//	    Down key.Binding
-//	}
-//
-//	var DefaultKeyMap = KeyMap{
-//	    Up: key.NewBinding(
-//	        key.WithKeys("k", "up"),        // actual keybindings
-//	        key.WithHelp("↑/k", "move up"), // corresponding help text
-//	    ),
-//	    Down: key.NewBinding(
-//	        key.WithKeys("j", "down"),
-//	        key.WithHelp("↓/j", "move down"),
-//	    ),
-//	}
-//
-//	func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-//	    switch msg := msg.(type) {
-//	    case tea.KeyPressMsg:
-//	        switch {
-//	        case key.Matches(msg, DefaultKeyMap.Up):
-//	            // The user pressed up
-//	        case key.Matches(msg, DefaultKeyMap.Down):
-//	            // The user pressed down
-//	        }
-//	    }
-//
-//	    // ...
-//	}
-//
-// The help information, which is not used in the example above, can be used
-// to render help text for keystrokes in your views.
 package key
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
+
+	tea "charm.land/bubbletea/v2"
+)
 
 // Binding describes a set of keybindings and, optionally, their associated
 // help text.
@@ -127,14 +98,93 @@ type Help struct {
 }
 
 // Matches checks if the given key matches the given bindings.
+//
+// The comparison tries the string representation first (fast path, preserves
+// existing behaviour for special keys like "enter" and printable chars like
+// "a"). When that fails and the key is a tea.KeyPressMsg, it falls back to
+// structural matching on Mod+Code. The fallback catches modified printable
+// keys where String() returns the bare Text — e.g. a terminal delivering
+// ctrl+comma as {Code:',', Mod:ModCtrl, Text:","} makes String() return ",",
+// which never equals "ctrl+,". Structural matching compares Mod+Code directly
+// and matches.
 func Matches[Key fmt.Stringer](k Key, b ...Binding) bool {
 	keys := k.String()
+	var teaKey tea.Key
+	if tk, ok := any(k).(tea.KeyPressMsg); ok {
+		teaKey = tk.Key()
+	}
 	for _, binding := range b {
+		if !binding.Enabled() {
+			continue
+		}
 		for _, v := range binding.keys {
-			if keys == v && binding.Enabled() {
+			if keys == v {
 				return true
+			}
+		}
+		if teaKey.Code != 0 || teaKey.Mod != 0 || teaKey.Text != "" {
+			for _, v := range binding.keys {
+				if keyMatch(teaKey, v) {
+					return true
+				}
 			}
 		}
 	}
 	return false
+}
+
+// keyMatch mirrors ultraviolet's keyMatchString: parse the binding into
+// modifier bits + a code/text, then compare Mod (masked) and Code, falling
+// back to Text for printable characters.
+func keyMatch(k tea.Key, s string) bool {
+	var (
+		mod  tea.KeyMod
+		code rune
+		text string
+	)
+	parts := strings.Split(s, "+")
+	for _, part := range parts {
+		switch part {
+		case "ctrl":
+			mod |= tea.ModCtrl
+		case "alt":
+			mod |= tea.ModAlt
+		case "shift":
+			mod |= tea.ModShift
+		case "meta":
+			mod |= tea.ModMeta
+		case "hyper":
+			mod |= tea.ModHyper
+		case "super":
+			mod |= tea.ModSuper
+		case "capslock":
+			mod |= tea.ModCapsLock
+		case "scrolllock":
+			mod |= tea.ModScrollLock
+		case "numlock":
+			mod |= tea.ModNumLock
+		default:
+			if utf8.RuneCountInString(part) == 1 {
+				code, _ = utf8.DecodeRuneInString(part)
+			} else {
+				code = 0
+				text = part
+			}
+		}
+	}
+
+	// Mask off shift/caps when a printable character is expected, so
+	// shift+a (Text="A", Mod=ModShift) still matches a binding for "A".
+	smod := mod &^ (tea.ModShift | tea.ModCapsLock)
+	if smod == 0 && text == "" && unicode.IsPrint(code) {
+		if mod&tea.ModShift != 0 || mod&tea.ModCapsLock != 0 {
+			return k.Text == string(unicode.ToUpper(code))
+		}
+		return k.Text == string(code)
+	}
+
+	// Otherwise compare Mod and Code, with a Text fallback for multi-rune
+	// keys.
+	return (k.Mod == mod && k.Code == code) ||
+		(k.Text != "" && k.Text == text)
 }
