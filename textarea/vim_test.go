@@ -674,7 +674,7 @@ func TestVim_Paste(t *testing.T) {
 		m.row = 0
 		m, _ = m.Update(keyPress('y'))
 		m, _ = m.Update(keyPress('y')) // yank "a" linewise
-		m.row = 2                       // cursor on "c"
+		m.row = 2                      // cursor on "c"
 		m, _ = m.Update(keyPress('p'))
 		if m.Value() != "a\nb\nc\na" {
 			t.Fatalf("got %q", m.Value())
@@ -1229,4 +1229,123 @@ func TestVim_LinewiseOpMotions(t *testing.T) {
 			t.Fatalf("got %q want %q", m.Value(), "a")
 		}
 	})
+}
+
+// TestVim_VisualSelectionVisibleWithDefaultStyles guards the default: a
+// consumer that configures nothing should still see the selection. Before
+// DefaultStyles supplied a SelectedText style, visual mode rendered
+// identically to normal mode and the selection was invisible.
+func TestVim_VisualSelectionVisibleWithDefaultStyles(t *testing.T) {
+	render := func(visual bool) string {
+		m := vimSetup(t)
+		m.Prompt = ""
+		m.ShowLineNumbers = false
+		m.SetWidth(20)
+		m.SetValue("hello world")
+		m.SetCursorColumn(0)
+		if visual {
+			m, _ = m.Update(keyPress('v'))
+			m, _ = m.Update(keyPress('l'))
+			m, _ = m.Update(keyPress('l'))
+		}
+		return m.View()
+	}
+
+	plain, selected := render(false), render(true)
+	if ansi.Strip(plain) != ansi.Strip(selected) {
+		t.Fatalf("visual mode changed the text, not just its styling:\nplain=%q\nselected=%q",
+			ansi.Strip(plain), ansi.Strip(selected))
+	}
+	if plain == selected {
+		t.Fatalf("visual selection is invisible with default styles; view=%q", selected)
+	}
+
+	// The default dark background (238) should be what makes the difference.
+	if !strings.Contains(selected, "48;5;238") {
+		t.Fatalf("expected the default selection background in the view; got %q", selected)
+	}
+}
+
+// TestVim_VisualSelectionStyleOverride pins that the consumer's style wins
+// over the default.
+func TestVim_VisualSelectionStyleOverride(t *testing.T) {
+	m := vimSetup(t)
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(20)
+
+	st := m.Styles()
+	st.Focused.SelectedText = lipgloss.NewStyle().Background(lipgloss.Color("201"))
+	m.SetStyles(st)
+
+	m.SetValue("hello world")
+	m.SetCursorColumn(0)
+	m, _ = m.Update(keyPress('v'))
+	m, _ = m.Update(keyPress('l'))
+
+	view := m.View()
+	if !strings.Contains(view, "48;5;201") {
+		t.Fatalf("consumer selection style not applied; view=%q", view)
+	}
+	if strings.Contains(view, "48;5;238") {
+		t.Fatalf("default selection style leaked through the override; view=%q", view)
+	}
+}
+
+// TestVim_VisualLineSelectionCoversWholeLines checks that V selects entire
+// rows, including the row the cursor started on and every row in between.
+func TestVim_VisualLineSelectionCoversWholeLines(t *testing.T) {
+	m := vimSetup(t)
+	m.Prompt = ""
+	m.ShowLineNumbers = false
+	m.SetWidth(20)
+	m.SetHeight(4)
+
+	st := m.Styles()
+	st.Focused.SelectedText = lipgloss.NewStyle().Background(lipgloss.Color("201"))
+	m.SetStyles(st)
+
+	m.SetValue("alpha\nbravo\ncharlie")
+	m.row = 0
+	m.SetCursorColumn(0)
+	m, _ = m.Update(keyPress('V'))
+	m, _ = m.Update(keyPress('j'))
+
+	lines := strings.Split(m.View(), "\n")
+	// Rows 0 and 1 are selected in full; row 2 is not selected at all.
+	for i, want := range []bool{true, true, false} {
+		if i >= len(lines) {
+			t.Fatalf("view has only %d lines: %q", len(lines), m.View())
+		}
+		got := strings.Contains(lines[i], "48;5;201")
+		if got != want {
+			t.Errorf("line %d (%q): selected=%v, want %v", i, ansi.Strip(lines[i]), got, want)
+		}
+	}
+}
+
+// TestVim_EscLeavesVisualModes pins the contract consumers rely on when they
+// route esc: both visual modes fall back to Normal.
+func TestVim_EscLeavesVisualModes(t *testing.T) {
+	for _, tc := range []struct {
+		key  rune
+		mode VimMode
+	}{
+		{'v', ModeVisualChar},
+		{'V', ModeVisualLine},
+	} {
+		m := vimSetup(t)
+		m.SetValue("hello world")
+		m.SetCursorColumn(0)
+
+		m, _ = m.Update(keyPress(tc.key))
+		if m.VimMode() != tc.mode {
+			t.Fatalf("%c entered %v, want %v", tc.key, m.VimMode(), tc.mode)
+		}
+
+		m, _ = m.Update(keyEsc())
+		if m.VimMode() != ModeNormal {
+			t.Errorf("esc from %v left mode at %v, want ModeNormal", tc.mode, m.VimMode())
+		}
+	}
 }

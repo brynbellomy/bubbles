@@ -12,14 +12,14 @@ import (
 	"time"
 	"unicode"
 
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/atotto/clipboard"
 	"github.com/brynbellomy/bubbles/cursor"
 	"github.com/brynbellomy/bubbles/internal/memoization"
 	"github.com/brynbellomy/bubbles/internal/runeutil"
 	"github.com/brynbellomy/bubbles/key"
 	"github.com/brynbellomy/bubbles/viewport"
-	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
-	"github.com/atotto/clipboard"
 	"github.com/charmbracelet/x/ansi"
 	rw "github.com/mattn/go-runewidth"
 	"github.com/rivo/uniseg"
@@ -197,7 +197,12 @@ type StyleState struct {
 	EndOfBuffer      lipgloss.Style
 	Placeholder      lipgloss.Style
 	Prompt           lipgloss.Style
-	SelectedText     lipgloss.Style // vim visual-mode selection style
+	// SelectedText styles the text covered by a vim visual-mode selection.
+	// It is inherited onto Base, so a background alone is enough; set a
+	// foreground too when the default text colour would not read against it.
+	// The zero value renders the selection indistinguishable from unselected
+	// text, so DefaultStyles supplies one — override it to match your theme.
+	SelectedText lipgloss.Style
 }
 
 func (s StyleState) computedCursorLine() lipgloss.Style {
@@ -413,6 +418,7 @@ func DefaultStyles(isDark bool) Styles {
 		LineNumber:       lipgloss.NewStyle().Foreground(lightDark(lipgloss.Color("249"), lipgloss.Color("7"))),
 		Placeholder:      lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
 		Prompt:           lipgloss.NewStyle().Foreground(lipgloss.Color("7")),
+		SelectedText:     lipgloss.NewStyle().Background(lightDark(lipgloss.Color("252"), lipgloss.Color("238"))),
 		Text:             lipgloss.NewStyle(),
 	}
 	s.Blurred = StyleState{
@@ -423,6 +429,7 @@ func DefaultStyles(isDark bool) Styles {
 		LineNumber:       lipgloss.NewStyle().Foreground(lightDark(lipgloss.Color("249"), lipgloss.Color("7"))),
 		Placeholder:      lipgloss.NewStyle().Foreground(lipgloss.Color("240")),
 		Prompt:           lipgloss.NewStyle().Foreground(lipgloss.Color("7")),
+		SelectedText:     lipgloss.NewStyle().Background(lightDark(lipgloss.Color("254"), lipgloss.Color("236"))),
 		Text:             lipgloss.NewStyle().Foreground(lightDark(lipgloss.Color("245"), lipgloss.Color("7"))),
 	}
 	s.Cursor = CursorStyle{
