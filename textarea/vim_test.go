@@ -1349,3 +1349,139 @@ func TestVim_EscLeavesVisualModes(t *testing.T) {
 		}
 	}
 }
+
+// TestVim_VisualYankFiresOnYank pins the onYank callback contract: a
+// visual-mode `y` invokes the registered callback with the selected text
+// and linewise flag, then drops to Normal mode. Delete/change operations
+// do not fire the callback — they keep classic cut/change semantics.
+func TestVim_VisualYankFiresOnYank(t *testing.T) {
+	t.Run("visual-char y invokes callback", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello world")
+		m.SetCursorColumn(0)
+		var gotText string
+		var gotLinewise bool
+		var calls int
+		m.SetOnYank(func(text string, linewise bool) {
+			gotText = text
+			gotLinewise = linewise
+			calls++
+		})
+		// Select "ello" (chars 1..4 inclusive): v then move to col 4.
+		m, _ = m.Update(keyPress('l')) // col 1
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('l')) // col 2
+		m, _ = m.Update(keyPress('l')) // col 3
+		m, _ = m.Update(keyPress('l')) // col 4
+		m, _ = m.Update(keyPress('y'))
+		if calls != 1 {
+			t.Fatalf("onYank calls: got %d want 1", calls)
+		}
+		if gotText != "ello" {
+			t.Fatalf("onYank text: got %q want %q", gotText, "ello")
+		}
+		if gotLinewise {
+			t.Fatalf("onYank linewise: got true want false (visual-char)")
+		}
+		if m.VimMode() != ModeNormal {
+			t.Fatalf("mode after y: got %v want ModeNormal", m.VimMode())
+		}
+		// Internal register also populated.
+		if m.vim.yankBuf != "ello" {
+			t.Fatalf("yankBuf: got %q want %q", m.vim.yankBuf, "ello")
+		}
+		if m.vim.yankLinewise {
+			t.Fatalf("yankLinewise: got true want false")
+		}
+	})
+
+	t.Run("visual-line y invokes callback linewise", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("alpha\nbravo\ncharlie")
+		m.row = 0
+		m.SetCursorColumn(0)
+		var gotText string
+		var gotLinewise bool
+		var calls int
+		m.SetOnYank(func(text string, linewise bool) {
+			gotText = text
+			gotLinewise = linewise
+			calls++
+		})
+		m, _ = m.Update(keyPress('V'))
+		m, _ = m.Update(keyPress('j')) // extend to row 1
+		m, _ = m.Update(keyPress('y'))
+		if calls != 1 {
+			t.Fatalf("onYank calls: got %d want 1", calls)
+		}
+		// Linewise visual yank includes the trailing newline (the range
+		// extends to the start of the row after the last selected line).
+		if gotText != "alpha\nbravo\n" {
+			t.Fatalf("onYank text: got %q want %q", gotText, "alpha\nbravo\n")
+		}
+		if !gotLinewise {
+			t.Fatalf("onYank linewise: got false want true (visual-line)")
+		}
+		if m.VimMode() != ModeNormal {
+			t.Fatalf("mode after y: got %v want ModeNormal", m.VimMode())
+		}
+		if !m.vim.yankLinewise {
+			t.Fatalf("yankLinewise: got false want true")
+		}
+	})
+
+	t.Run("nil callback is a no-op", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		m.SetOnYank(nil)
+		m, _ = m.Update(keyPress('v'))
+		// Yank without moving: selection is just the char under cursor.
+		m, _ = m.Update(keyPress('y'))
+		if m.VimMode() != ModeNormal {
+			t.Fatalf("mode after y: got %v want ModeNormal", m.VimMode())
+		}
+		if m.vim.yankBuf != "h" {
+			t.Fatalf("yankBuf: got %q want %q", m.vim.yankBuf, "h")
+		}
+	})
+
+	t.Run("visual d does not fire onYank", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		var calls int
+		m.SetOnYank(func(text string, linewise bool) { calls++ })
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('d'))
+		if calls != 0 {
+			t.Fatalf("onYank calls on visual d: got %d want 0", calls)
+		}
+		// d still populates the internal register (cut semantics).
+		if m.vim.yankBuf != "h" {
+			t.Fatalf("yankBuf after d: got %q want %q", m.vim.yankBuf, "h")
+		}
+		if m.Value() != "ello" {
+			t.Fatalf("value after d: got %q want %q", m.Value(), "ello")
+		}
+	})
+
+	t.Run("visual c does not fire onYank", func(t *testing.T) {
+		m := vimSetup(t)
+		m.SetValue("hello")
+		m.SetCursorColumn(0)
+		var calls int
+		m.SetOnYank(func(text string, linewise bool) { calls++ })
+		m, _ = m.Update(keyPress('v'))
+		m, _ = m.Update(keyPress('c'))
+		if calls != 0 {
+			t.Fatalf("onYank calls on visual c: got %d want 0", calls)
+		}
+		if m.vim.yankBuf != "h" {
+			t.Fatalf("yankBuf after c: got %q want %q", m.vim.yankBuf, "h")
+		}
+		if m.VimMode() != ModeInsert {
+			t.Fatalf("mode after c: got %v want ModeInsert", m.VimMode())
+		}
+	})
+}

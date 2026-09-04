@@ -522,6 +522,20 @@ func (m *Model) SetVimMode(mode VimMode) {
 	m.applyVimCursorShape()
 }
 
+// SetOnYank registers a callback invoked with the text yanked by a
+// visual-mode `y` operation (character-wise or line-wise). The callback
+// receives the yanked text and whether the yank was linewise (visual-line
+// mode). Pass nil to clear an existing callback.
+//
+// The callback fires after the yank register is populated and before the
+// cursor is repositioned to the selection start. It does not fire for
+// delete/change operations (`d`, `x`, `c`) — those keep classic cut/change
+// semantics, populating only the internal yank register. No-op if vim is
+// not enabled; the callback is still stored and fires once vim is enabled.
+func (m *Model) SetOnYank(fn func(text string, linewise bool)) {
+	m.vim.onYank = fn
+}
+
 // applyVimCursorShape sets the cursor shape based on the current vim mode.
 // No-op if vim is not enabled.
 func (m *Model) applyVimCursorShape() {

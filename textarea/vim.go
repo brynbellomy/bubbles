@@ -52,6 +52,10 @@ type vimState struct {
 	yankBuf          string
 	yankLinewise     bool
 	savedCursorShape tea.CursorShape
+	// onYank, when set, is invoked with the text yanked by a visual-mode
+	// `y` operation. Consumers use it to mirror the selection into the OS
+	// clipboard. nil means no callback (the default).
+	onYank func(text string, linewise bool)
 }
 
 // vimEscBinding matches Esc and Ctrl-[ in both Insert and non-Insert modes.
@@ -173,6 +177,9 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			r1, c1, r2, c2 := m.vimVisualRange()
 			m.vimYankRange(r1, c1, r2, c2)
 			m.vim.yankLinewise = m.vim.mode == ModeVisualLine
+			if m.vim.onYank != nil {
+				m.vim.onYank(m.vim.yankBuf, m.vim.yankLinewise)
+			}
 			m.row = r1
 			m.SetCursorColumn(c1)
 			m.vim.mode = ModeNormal
