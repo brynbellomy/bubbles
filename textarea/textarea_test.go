@@ -2429,3 +2429,40 @@ func stripString(str string) string {
 
 	return strings.Join(lines, "\n")
 }
+
+// TestCursorStaysInViewportAfterSetValue pins that content set from outside
+// Update scrolls the viewport to the cursor, so Cursor() reports a row inside
+// the visible area.
+func TestCursorStaysInViewportAfterSetValue(t *testing.T) {
+	ta := newDynamicTextArea(1, 5)
+	ta.SetVirtualCursor(false)
+
+	ta.SetValue(strings.Repeat("line\n", 50))
+
+	c := ta.Cursor()
+	if c == nil {
+		t.Fatal("expected a cursor for a focused textarea")
+	}
+	if c.Y < 0 || c.Y >= ta.Height() {
+		t.Errorf("cursor row %d outside the %d-row viewport", c.Y, ta.Height())
+	}
+}
+
+// TestCursorStaysInViewportAfterMoveToEnd pins that MoveToEnd after an
+// external SetValue scrolls against the current content.
+func TestCursorStaysInViewportAfterMoveToEnd(t *testing.T) {
+	ta := newDynamicTextArea(1, 5)
+	ta.SetVirtualCursor(false)
+
+	ta.SetValue(strings.Repeat("line\n", 50))
+	ta.MoveToBegin()
+	ta.MoveToEnd()
+
+	c := ta.Cursor()
+	if c == nil {
+		t.Fatal("expected a cursor for a focused textarea")
+	}
+	if c.Y < 0 || c.Y >= ta.Height() {
+		t.Errorf("cursor row %d outside the %d-row viewport", c.Y, ta.Height())
+	}
+}

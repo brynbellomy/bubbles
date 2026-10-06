@@ -1167,9 +1167,11 @@ func (m Model) LineInfo() LineInfo {
 	return LineInfo{}
 }
 
-// repositionView repositions the view of the viewport based on the defined
-// scrolling behavior.
+// repositionView scrolls the viewport so the cursor line is visible. It
+// refreshes the viewport content first, since scrolling clamps against it and
+// callers outside Update (SetValue, MoveToEnd) change the value without it.
 func (m *Model) repositionView() {
+	m.viewport.SetContent(m.view())
 	minimum := m.viewport.YOffset()
 	maximum := minimum + m.viewport.Height() - 1
 	if row := m.cursorLineNumber(); row < minimum {
