@@ -2,18 +2,21 @@
 //
 // This file implements opt-in vim modal keybindings for the textarea. The
 // surface covers Normal / Insert / Visual / Replace modes, motions, operators
-// over motions, text objects, counts, and a single unnamed yank register.
-// Marks, macros, named registers, search, and block visual are out of scope.
+// over motions, text objects, counts, joins, shifts, search, and a single
+// unnamed yank register. Marks, macros, named registers, and block visual are
+// out of scope.
 // See docs/superpowers/specs/2026-06-10-textarea-vim-keybindings-design.md.
 package textarea
 
 import (
+	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
-	"github.com/brynbellomy/bubbles/key"
 	tea "charm.land/bubbletea/v2"
 	lipgloss "charm.land/lipgloss/v2"
+	"github.com/brynbellomy/bubbles/key"
 )
 
 // VimMode identifies which vim mode the textarea is currently in.
@@ -29,7 +32,8 @@ const (
 	ModeVisualChar
 	// ModeVisualLine is line-wise visual selection.
 	ModeVisualLine
-	// ModeReplace is the single-shot replace mode entered with `r{c}`.
+	// ModeReplace is vim's Replace mode, entered with `R`: typed characters
+	// overwrite the line.
 	ModeReplace
 )
 
@@ -52,6 +56,8 @@ type vimState struct {
 	yankBuf          string
 	yankLinewise     bool
 	savedCursorShape tea.CursorShape
+	search           vimSearch
+	replace          vimReplaceSession
 	// onYank, when set, is invoked with the text yanked by a visual-mode
 	// `y` operation. Consumers use it to mirror the selection into the OS
 	// clipboard. nil means no callback (the default).
@@ -157,14 +163,35 @@ const vimMaxCount = 9999
 // vimUpdate handles a key press in a non-Insert vim mode.
 func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 	defer m.applyVimCursorShape()
+	if m.vim.search.prompting {
+		m.vimSearchPromptUpdate(msg)
+		return
+	}
+	if m.vim.mode == ModeReplace {
+		m.vimReplaceUpdate(msg)
+		return
+	}
 	if key.Matches(msg, vimEscBinding) {
 		m.SetVimMode(ModeNormal)
 		return
 	}
 
 	// Visual-mode operators consume the selection immediately.
-	if m.vim.mode == ModeVisualChar || m.vim.mode == ModeVisualLine {
+	if (m.vim.mode == ModeVisualChar || m.vim.mode == ModeVisualLine) &&
+		m.vim.pendingOp == 0 && m.vim.pendingFindKind == 0 {
 		switch msg.String() {
+		case "J":
+			m.vimVisualJoin(true)
+			return
+		case ">", "<":
+			amount := max(m.vim.pendingCount, 1)
+			m.vim.pendingCount = 0
+			r1, r2 := m.vimVisualRows()
+			m.vimVisualOpStart()
+			m.snapshotUndo()
+			m.vimShiftLines(r1, r2, msg.String() == "<", amount)
+			m.vim.mode = ModeNormal
+			return
 		case "d", "x":
 			m.snapshotUndo()
 			r1, c1, r2, c2 := m.vimVisualRange()
@@ -260,6 +287,15 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			m.vim.pendingOp = 'L' // pending "lowercase over motion"
 		case "U":
 			m.vim.pendingOp = 'U' // pending "uppercase over motion"
+		case "J":
+			m.vim.pendingOp = 0
+			if m.vim.mode == ModeVisualChar || m.vim.mode == ModeVisualLine {
+				m.vimVisualJoin(false)
+			} else {
+				count := m.vim.pendingCount
+				m.vim.pendingCount = 0
+				m.vimJoinCount(count, false)
+			}
 		default:
 			m.vim.pendingOp = 0
 		}
@@ -278,6 +314,10 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			return
 		}
 		m.snapshotUndo()
+		if op == '>' || op == '<' {
+			m.vimShiftLines(r1, vimExclusiveEndRow(r1, r2, c2), op == '<', 1)
+			return
+		}
 		m.vimYankRange(r1, c1, r2, c2)
 		if op != 'y' {
 			m.vimDeleteRange(r1, c1, r2, c2)
@@ -288,8 +328,7 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		return
 	}
 
-	if m.vim.pendingOp == 'd' || m.vim.pendingOp == 'c' || m.vim.pendingOp == 'y' {
-		op := m.vim.pendingOp
+	if op := m.vim.pendingOp; op == 'd' || op == 'c' || op == 'y' || op == '>' || op == '<' {
 		m.vim.pendingOp = 0
 		s := msg.String()
 		// Digit after operator (e.g. d3w) — accumulate into count and keep
@@ -317,6 +356,13 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 				count = 1
 			}
 			m.vim.pendingCount = 0
+			if op == '>' || op == '<' {
+				if r1, r2, ok := m.vimLineSpan(count); ok {
+					m.snapshotUndo()
+					m.vimShiftLines(r1, r2, op == '<', 1)
+				}
+				return
+			}
 			m.snapshotUndo()
 			startRow := m.row
 			endRow := m.row + count - 1
@@ -368,6 +414,13 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 			return
 		}
 		m.snapshotUndo()
+		if op == '>' || op == '<' {
+			if !linewise {
+				r2 = vimExclusiveEndRow(r1, r2, c2)
+			}
+			m.vimShiftLines(min(r1, r2), max(r1, r2), op == '<', 1)
+			return
+		}
 		if linewise {
 			// Linewise motion — convert to row-range delete/yank.
 			if r1 > r2 {
@@ -623,7 +676,29 @@ func (m *Model) vimUpdate(msg tea.KeyPressMsg) {
 		m.vimPaste(false) // before
 	case "r":
 		m.vim.pendingOp = 'r'
+	case "R":
+		if m.vim.mode != ModeNormal {
+			break
+		}
+		m.snapshotUndo()
 		m.vim.mode = ModeReplace
+		m.vim.replace = vimReplaceSession{count: count}
+	case "J":
+		m.vimJoinCount(rawCount, true)
+	case ">", "<":
+		m.vim.pendingOp = rune(s[0])
+		m.vim.pendingCount = rawCount
+	case "/", "?":
+		m.vim.search.prompting = true
+		m.vim.search.forward = s == "/"
+		m.vim.search.input = nil
+		m.vim.search.count = count
+	case "n", "N":
+		if m.vim.search.last != nil {
+			m.vimSearchJump(m.vim.search.last, m.vim.search.lastForward == (s == "n"), count)
+		}
+	case "*", "#":
+		m.vimSearchWordUnderCursor(s == "*", count)
 	case "~":
 		m.snapshotUndo()
 		for i := 0; i < count; i++ {
@@ -1489,4 +1564,608 @@ func (m *Model) renderWrappedLineWithSelection(
 		b.WriteString(baseStyle.Render(string(wrappedLine[end:])))
 	}
 	return b.String()
+}
+
+// vimLineSpan resolves the rows of a linewise command over count lines from
+// the cursor, following vim's cursor_down: a count that runs past the last
+// line clamps to it, but a count above 1 on the last line fails.
+func (m *Model) vimLineSpan(count int) (r1, r2 int, ok bool) {
+	last := len(m.value) - 1
+	if count > 1 && m.row >= last {
+		return 0, 0, false
+	}
+	return m.row, min(m.row+count-1, last), true
+}
+
+// vimVisualRows returns the first and last row touched by the visual
+// selection.
+func (m *Model) vimVisualRows() (r1, r2 int) {
+	return min(m.vim.selStartRow, m.row), max(m.vim.selStartRow, m.row)
+}
+
+// vimVisualOpStart moves the cursor to the start of the visual selection, the
+// position an operator on it starts from and its undo returns to.
+func (m *Model) vimVisualOpStart() {
+	r1, c1, _, _ := m.vimVisualRange()
+	m.row = r1
+	m.SetCursorColumn(c1)
+}
+
+// vimExclusiveEndRow returns the last row an exclusive range ending at
+// (r2, c2) covers: an end at column 0 of a later row excludes that row.
+func vimExclusiveEndRow(r1, r2, c2 int) int {
+	if c2 == 0 && r2 > r1 {
+		return r2 - 1
+	}
+	return r2
+}
+
+// vimJoinCount implements [count]J and [count]gJ: join count lines, at least
+// two, starting at the cursor.
+func (m *Model) vimJoinCount(count int, insertSpace bool) {
+	r1, r2, ok := m.vimLineSpan(max(count, 2))
+	if !ok {
+		return
+	}
+	m.snapshotUndo()
+	m.vimJoinLines(r1, r2, insertSpace)
+}
+
+// vimVisualJoin implements visual J and gJ: join the selected lines, at least
+// two, and return to Normal mode.
+func (m *Model) vimVisualJoin(insertSpace bool) {
+	r1, r2 := m.vimVisualRows()
+	m.vimVisualOpStart()
+	m.vim.mode = ModeNormal
+	m.vim.pendingCount = 0
+	if r1 == r2 {
+		r2++
+	}
+	if r2 >= len(m.value) {
+		return
+	}
+	m.snapshotUndo()
+	m.vimJoinLines(r1, r2, insertSpace)
+}
+
+// vimJoinLines joins rows r1..r2 into r1 the way vim's do_join does. With
+// insertSpace (J), each joined line loses its leading whitespace and one space
+// separates it from the text before, unless the joined text is empty or
+// starts with ')', the text before is empty, or the previous line's text ends
+// in whitespace ('joinspaces' off). Without insertSpace (gJ) the lines are
+// concatenated unchanged. The cursor lands where the last line was joined.
+func (m *Model) vimJoinLines(r1, r2 int, insertSpace bool) {
+	joined := append([]rune(nil), m.value[r1]...)
+	prevEnd := vimLastRune(joined)
+	col := 0
+	for r := r1 + 1; r <= r2; r++ {
+		curr := m.value[r]
+		col = len(joined)
+		if insertSpace {
+			curr = vimSkipWhite(curr)
+			if len(curr) > 0 && curr[0] != ')' && len(joined) > 0 &&
+				prevEnd != ' ' && prevEnd != '\t' {
+				joined = append(joined, ' ')
+			}
+		}
+		joined = append(joined, curr...)
+		prevEnd = vimLastRune(curr)
+	}
+	m.value[r1] = joined
+	m.value = append(m.value[:r1+1], m.value[r2+1:]...)
+	m.row = r1
+	m.SetCursorColumn(min(col, max(len(joined)-1, 0)))
+	m.repositionView()
+}
+
+// vimSkipWhite returns line without its leading spaces and tabs.
+func vimSkipWhite(line []rune) []rune {
+	i := 0
+	for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+		i++
+	}
+	return line[i:]
+}
+
+// vimLastRune returns the last rune of line, or 0 when line is empty.
+func vimLastRune(line []rune) rune {
+	if len(line) == 0 {
+		return 0
+	}
+	return line[len(line)-1]
+}
+
+// vimShiftLines implements > and < over rows r1..r2: each non-empty line's
+// indent moves by amount shiftwidths (tabWidth columns), never below zero,
+// and is rewritten as spaces. The cursor lands on the first non-blank of r1.
+func (m *Model) vimShiftLines(r1, r2 int, left bool, amount int) {
+	for r := r1; r <= r2; r++ {
+		line := m.value[r]
+		if len(line) == 0 {
+			continue
+		}
+		indent, body := 0, 0
+		for ; body < len(line) && (line[body] == ' ' || line[body] == '\t'); body++ {
+			if line[body] == '\t' {
+				indent += tabWidth - indent%tabWidth
+			} else {
+				indent++
+			}
+		}
+		if left {
+			indent = max(indent-amount*tabWidth, 0)
+		} else {
+			indent += amount * tabWidth
+		}
+		shifted := make([]rune, 0, indent+len(line)-body)
+		shifted = append(shifted, []rune(strings.Repeat(" ", indent))...)
+		m.value[r] = append(shifted, line[body:]...)
+	}
+	m.row = r1
+	m.vimMotionFirstNonBlank()
+	// A whitespace-only line has no first non-blank; Normal mode rests on
+	// its last character.
+	if n := len(m.value[m.row]); n > 0 && m.col >= n {
+		m.SetCursorColumn(n - 1)
+	}
+	m.repositionView()
+}
+
+// vimMatcher returns the rune offsets at which a search pattern matches line,
+// in ascending order.
+type vimMatcher func(line []rune) []int
+
+// vimSearch holds the `/` `?` prompt and the last search for n and N.
+type vimSearch struct {
+	prompting   bool
+	forward     bool // direction of the open prompt
+	input       []rune
+	count       int
+	last        vimMatcher
+	lastForward bool
+}
+
+// vimSearchPromptUpdate edits the open search prompt: Enter runs it, Esc
+// cancels it, and Backspace on an empty prompt cancels it as vim does.
+func (m *Model) vimSearchPromptUpdate(msg tea.KeyPressMsg) {
+	p := &m.vim.search
+	switch {
+	case key.Matches(msg, vimEscBinding):
+		p.prompting, p.input = false, nil
+	case msg.String() == "enter":
+		p.prompting = false
+		m.vimSearchRun(string(p.input), p.forward, p.count)
+		p.input = nil
+	case msg.String() == "backspace":
+		if len(p.input) == 0 {
+			p.prompting = false
+			return
+		}
+		p.input = p.input[:len(p.input)-1]
+	default:
+		if msg.Text != "" {
+			p.input = append(p.input, []rune(msg.Text)...)
+		} else if r, ok := singleRune(msg); ok {
+			p.input = append(p.input, r)
+		}
+	}
+}
+
+// vimSearchRun compiles pattern and jumps to its count-th match. An empty
+// pattern reuses the last one in the new direction; an invalid pattern
+// leaves the cursor and the last search unchanged.
+func (m *Model) vimSearchRun(pattern string, forward bool, count int) {
+	match := m.vim.search.last
+	if pattern != "" {
+		re, err := vimCompilePattern(pattern)
+		if err != nil {
+			return
+		}
+		match = vimRegexpMatcher(re)
+	}
+	if match == nil {
+		return
+	}
+	m.vim.search.last = match
+	m.vim.search.lastForward = forward
+	m.vimSearchJump(match, forward, count)
+}
+
+// vimSearchWordUnderCursor implements * and #: search for the keyword under
+// or after the cursor as a whole word (or, on a line with no keyword there,
+// the non-blank string), starting from its first character.
+func (m *Model) vimSearchWordUnderCursor(forward bool, count int) {
+	line := m.value[m.row]
+	start, end, keyword := vimIdentAt(line, m.col)
+	if start == end {
+		return
+	}
+	word := append([]rune(nil), line[start:end]...)
+	match := vimWordMatcher(word, keyword)
+	m.vim.search.last = match
+	m.vim.search.lastForward = forward
+	m.SetCursorColumn(start)
+	m.vimSearchJump(match, forward, count)
+}
+
+// vimIdentAt finds the text * and # search for, per vim's
+// find_ident_under_cursor: the keyword at or after col, else the non-blank
+// run at or after col. keyword reports which was found; start == end means
+// neither was.
+func vimIdentAt(line []rune, col int) (start, end int, keyword bool) {
+	find := func(in func(rune) bool) (int, int, bool) {
+		i := col
+		for i < len(line) && !in(line[i]) {
+			i++
+		}
+		if i == len(line) {
+			return 0, 0, false
+		}
+		s, e := i, i
+		for s > 0 && in(line[s-1]) {
+			s--
+		}
+		for e < len(line) && in(line[e]) {
+			e++
+		}
+		return s, e, true
+	}
+	if s, e, ok := find(isVimWordChar); ok {
+		return s, e, true
+	}
+	nonBlank := func(r rune) bool { return !unicode.IsSpace(r) && !isVimWordChar(r) }
+	s, e, _ := find(nonBlank)
+	return s, e, false
+}
+
+// vimWordMatcher matches word literally; with whole, only where it is not
+// adjacent to another keyword character (vim's \< \>).
+func vimWordMatcher(word []rune, whole bool) vimMatcher {
+	return func(line []rune) []int {
+		var out []int
+		for i := 0; i+len(word) <= len(line); i++ {
+			if string(line[i:i+len(word)]) != string(word) {
+				continue
+			}
+			end := i + len(word)
+			if whole && ((i > 0 && isVimWordChar(line[i-1])) || (end < len(line) && isVimWordChar(line[end]))) {
+				continue
+			}
+			out = append(out, i)
+		}
+		return out
+	}
+}
+
+// vimRegexpMatcher matches re against each line. Matches do not overlap.
+func vimRegexpMatcher(re *regexp.Regexp) vimMatcher {
+	return func(line []rune) []int {
+		s := string(line)
+		locs := re.FindAllStringIndex(s, -1)
+		out := make([]int, 0, len(locs))
+		for _, loc := range locs {
+			out = append(out, utf8.RuneCountInString(s[:loc[0]]))
+		}
+		return out
+	}
+}
+
+// vimSearchJump moves the cursor to the count-th match of match after (or,
+// backward, before) the cursor, wrapping around the buffer ends as vim's
+// 'wrapscan' does. It reports whether any match exists.
+func (m *Model) vimSearchJump(match vimMatcher, forward bool, count int) bool {
+	type pos struct{ row, col int }
+	var hits []pos
+	for r, line := range m.value {
+		lastCol := -1
+		for _, c := range match(line) {
+			// A match at end of line sits on the last character, as the
+			// Normal-mode cursor does.
+			c = min(c, max(len(line)-1, 0))
+			if c != lastCol {
+				hits = append(hits, pos{r, c})
+				lastCol = c
+			}
+		}
+	}
+	if len(hits) == 0 {
+		return false
+	}
+	before := func(a, b pos) bool { return a.row < b.row || (a.row == b.row && a.col < b.col) }
+	cur := pos{m.row, m.col}
+	for range max(count, 1) {
+		next := -1
+		if forward {
+			for i, h := range hits {
+				if before(cur, h) {
+					next = i
+					break
+				}
+			}
+			if next < 0 {
+				next = 0
+			}
+		} else {
+			for i := len(hits) - 1; i >= 0; i-- {
+				if before(hits[i], cur) {
+					next = i
+					break
+				}
+			}
+			if next < 0 {
+				next = len(hits) - 1
+			}
+		}
+		cur = hits[next]
+	}
+	m.row = cur.row
+	m.SetCursorColumn(cur.col)
+	m.repositionView()
+	return true
+}
+
+// vimCompilePattern translates a vim pattern in the default 'magic' syntax to
+// a Go regexp. `. * [] ^ $` are special as in vim; `( ) | + ? = {` are
+// literal unless backslashed; `\< \>` become ASCII word boundaries; `\c`
+// ignores case. Matching is case-sensitive by default ('ignorecase' off).
+func vimCompilePattern(p string) (*regexp.Regexp, error) {
+	rs := []rune(p)
+	var b strings.Builder
+	fold := false
+	// atStart is true where vim treats ^ as an anchor and * as a literal:
+	// the start of the pattern, of a group, or of an alternative.
+	atStart := true
+	for i := 0; i < len(rs); i++ {
+		r := rs[i]
+		wasStart := atStart
+		atStart = false
+		if r == '\\' && i+1 < len(rs) {
+			i++
+			switch n := rs[i]; n {
+			case '(':
+				b.WriteString("(")
+				atStart = true
+			case '|':
+				b.WriteString("|")
+				atStart = true
+			case ')', '+', '?':
+				b.WriteRune(n)
+			case '=':
+				b.WriteString("?")
+			case '{':
+				j := i + 1
+				for j < len(rs) && rs[j] != '}' {
+					j++
+				}
+				if j == len(rs) {
+					b.WriteString(`\{`)
+					break
+				}
+				body := strings.TrimSuffix(string(rs[i+1:j]), `\`)
+				lazy := strings.HasPrefix(body, "-")
+				body = strings.TrimPrefix(body, "-")
+				switch {
+				case body == "":
+					b.WriteString("*")
+				case strings.HasPrefix(body, ","):
+					b.WriteString("{0" + body + "}")
+				default:
+					b.WriteString("{" + body + "}")
+				}
+				if lazy {
+					b.WriteString("?")
+				}
+				i = j
+			case '<', '>':
+				b.WriteString(`\b`)
+			case 's', 'S', 'd', 'D', 'w', 'W', 'n', 't':
+				b.WriteRune('\\')
+				b.WriteRune(n)
+			case 'c':
+				fold = true
+				atStart = wasStart
+			case 'C':
+				atStart = wasStart
+			default:
+				b.WriteString(regexp.QuoteMeta(string(n)))
+			}
+			continue
+		}
+		switch r {
+		case '^':
+			if wasStart {
+				b.WriteString("^")
+				atStart = true
+			} else {
+				b.WriteString(`\^`)
+			}
+		case '$':
+			if i == len(rs)-1 || strings.HasPrefix(string(rs[i+1:]), `\|`) || strings.HasPrefix(string(rs[i+1:]), `\)`) {
+				b.WriteString("$")
+			} else {
+				b.WriteString(`\$`)
+			}
+		case '*':
+			if wasStart {
+				b.WriteString(`\*`)
+			} else {
+				b.WriteString("*")
+			}
+		case '.':
+			b.WriteString(".")
+		case '[':
+			end := vimCollectionEnd(rs, i)
+			if end < 0 {
+				b.WriteString(`\[`)
+				break
+			}
+			b.WriteString(string(rs[i : end+1]))
+			i = end
+		default:
+			b.WriteString(regexp.QuoteMeta(string(r)))
+		}
+	}
+	expr := b.String()
+	if fold {
+		expr = "(?i)" + expr
+	}
+	return regexp.Compile(expr)
+}
+
+// vimCollectionEnd returns the index of the ']' closing the collection that
+// opens at rs[open], or -1 when it is unclosed (vim then matches '[' as a
+// literal). A ']' right after '[' or '[^' is a member, not the close.
+func vimCollectionEnd(rs []rune, open int) int {
+	i := open + 1
+	if i < len(rs) && rs[i] == '^' {
+		i++
+	}
+	if i < len(rs) && rs[i] == ']' {
+		i++
+	}
+	for ; i < len(rs); i++ {
+		switch rs[i] {
+		case '\\':
+			i++
+		case ']':
+			return i
+		}
+	}
+	return -1
+}
+
+// vimReplaceEdit records one character typed in Replace mode so Backspace
+// can undo it: the rune it overwrote, an append past end of line, or a line
+// break.
+type vimReplaceEdit struct {
+	orig     rune
+	replaced bool
+	newline  bool
+}
+
+// vimReplaceSession is the state of one `R` session: the edits Backspace can
+// undo, the net typed text, and the count that repeats it on Esc.
+type vimReplaceSession struct {
+	edits []vimReplaceEdit
+	typed []rune
+	count int
+}
+
+// vimReplaceUpdate handles a key in Replace mode.
+func (m *Model) vimReplaceUpdate(msg tea.KeyPressMsg) {
+	switch {
+	case key.Matches(msg, vimEscBinding):
+		m.vimReplaceFinish()
+	case msg.String() == "enter":
+		m.vimReplaceInput([]rune{'\n'})
+	case msg.String() == "backspace":
+		m.vimReplaceBackspace()
+	default:
+		if msg.Text != "" {
+			m.vimReplaceInput([]rune(msg.Text))
+		} else if r, ok := singleRune(msg); ok {
+			m.vimReplaceInput([]rune{r})
+		}
+	}
+}
+
+// vimReplaceInput types runes in Replace mode and records them for
+// Backspace and the count repeat.
+func (m *Model) vimReplaceInput(runes []rune) {
+	for _, r := range m.san().Sanitize(runes) {
+		if m.vimReplaceRune(r) {
+			m.vim.replace.typed = append(m.vim.replace.typed, r)
+		}
+	}
+}
+
+// vimReplaceRune overwrites the character under the cursor with r, appends
+// r at end of line, or breaks the line for '\n' (deleting nothing), as vim's
+// Replace mode does. It reports whether r was applied.
+func (m *Model) vimReplaceRune(r rune) bool {
+	s := &m.vim.replace
+	if r == '\n' {
+		if m.atContentLimit() {
+			return false
+		}
+		m.splitLine(m.row, m.col)
+		s.edits = append(s.edits, vimReplaceEdit{newline: true})
+		return true
+	}
+	line := m.value[m.row]
+	if m.col < len(line) {
+		s.edits = append(s.edits, vimReplaceEdit{orig: line[m.col], replaced: true})
+		line[m.col] = r
+	} else {
+		if m.CharLimit > 0 && m.Length() >= m.CharLimit {
+			return false
+		}
+		m.value[m.row] = append(line, r)
+		s.edits = append(s.edits, vimReplaceEdit{})
+	}
+	m.SetCursorColumn(m.col + 1)
+	return true
+}
+
+// vimReplaceBackspace undoes the last Replace-mode edit: an overwritten
+// character is restored, an appended one or a line break is removed. Before
+// the start of the session it only moves the cursor left.
+func (m *Model) vimReplaceBackspace() {
+	s := &m.vim.replace
+	if len(s.edits) == 0 {
+		m.vimMotionCharLeft()
+		return
+	}
+	e := s.edits[len(s.edits)-1]
+	s.edits = s.edits[:len(s.edits)-1]
+	if len(s.typed) > 0 {
+		s.typed = s.typed[:len(s.typed)-1]
+	}
+	if e.newline {
+		m.mergeLineAbove(m.row)
+		return
+	}
+	m.SetCursorColumn(m.col - 1)
+	line := m.value[m.row]
+	if e.replaced {
+		line[m.col] = e.orig
+		return
+	}
+	m.value[m.row] = append(line[:m.col], line[m.col+1:]...)
+}
+
+// vimReplaceFinish leaves Replace mode: the typed text is replayed count-1
+// more times, still overwriting, and the cursor steps back onto the last
+// typed character.
+func (m *Model) vimReplaceFinish() {
+	s := m.vim.replace
+	for i := 1; i < s.count; i++ {
+		for _, r := range s.typed {
+			m.vimReplaceRune(r)
+		}
+	}
+	m.vim.replace = vimReplaceSession{}
+	m.vim.mode = ModeNormal
+	m.vimMotionCharLeft()
+}
+
+// vimPasteIntoPrompt routes pasted text to the open search prompt or to
+// Replace mode. It reports whether it consumed the paste.
+func (m *Model) vimPasteIntoPrompt(runes []rune) bool {
+	if !m.vimEnabled {
+		return false
+	}
+	switch {
+	case m.vim.search.prompting:
+		for _, r := range runes {
+			if r != '\n' && r != '\r' {
+				m.vim.search.input = append(m.vim.search.input, r)
+			}
+		}
+		return true
+	case m.vim.mode == ModeReplace:
+		m.vimReplaceInput(runes)
+		return true
+	}
+	return false
 }

@@ -33,6 +33,10 @@ const (
 	defaultMaxHeight = 99
 	defaultMaxWidth  = 500
 
+	// tabWidth is the number of spaces a typed tab expands to; vim mode's
+	// shiftwidth is the same width.
+	tabWidth = 4
+
 	// XXX: in v2, make max lines dynamic and default max lines configurable.
 	maxLines = 10000
 )
@@ -519,7 +523,24 @@ func (m *Model) SetVimMode(mode VimMode) {
 	m.vim.pendingCount = 0
 	m.vim.pendingFindKind = 0
 	m.vim.pendingObject = 0
+	m.vim.search.prompting = false
+	m.vim.search.input = nil
+	m.vim.replace = vimReplaceSession{}
 	m.applyVimCursorShape()
+}
+
+// VimSearchPrompt returns the command line of an open `/` or `?` search
+// prompt (for example "/foo"), and whether a prompt is open. Consumers render
+// it; the textarea does not.
+func (m Model) VimSearchPrompt() (string, bool) {
+	if !m.vimEnabled || !m.vim.search.prompting {
+		return "", false
+	}
+	lead := "/"
+	if !m.vim.search.forward {
+		lead = "?"
+	}
+	return lead + string(m.vim.search.input), true
 }
 
 // SetOnYank registers a callback invoked with the text yanked by a
@@ -543,10 +564,10 @@ func (m *Model) applyVimCursorShape() {
 		return
 	}
 	var shape tea.CursorShape
-	switch m.vim.mode {
-	case ModeInsert:
+	switch {
+	case m.vim.mode == ModeInsert:
 		shape = tea.CursorBar
-	case ModeReplace:
+	case m.vim.mode == ModeReplace, m.vim.pendingOp == 'r':
 		shape = tea.CursorUnderline
 	default:
 		shape = tea.CursorBlock
@@ -919,9 +940,7 @@ func (m *Model) Word() string {
 // san initializes or retrieves the rune sanitizer.
 func (m *Model) san() runeutil.Sanitizer {
 	if m.rsan == nil {
-		// Textinput has all its input on a single line so collapse
-		// newlines/tabs to single spaces.
-		m.rsan = runeutil.NewSanitizer()
+		m.rsan = runeutil.NewSanitizer(runeutil.ReplaceTabs(strings.Repeat(" ", tabWidth)))
 	}
 	return m.rsan
 }
@@ -1329,7 +1348,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 
 	switch msg := msg.(type) {
 	case tea.PasteMsg:
-		m.insertRunesFromUserInput([]rune(msg.Content))
+		if !m.vimPasteIntoPrompt([]rune(msg.Content)) {
+			m.insertRunesFromUserInput([]rune(msg.Content))
+		}
 	case tea.KeyPressMsg:
 		if m.vimEnabled && m.vim.mode != ModeInsert {
 			m.vimUpdate(msg)
@@ -1435,7 +1456,9 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 
 	case pasteMsg:
-		m.insertRunesFromUserInput([]rune(msg))
+		if !m.vimPasteIntoPrompt([]rune(msg)) {
+			m.insertRunesFromUserInput([]rune(msg))
+		}
 
 	case pasteErrMsg:
 		m.Err = msg

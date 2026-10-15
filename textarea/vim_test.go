@@ -1485,3 +1485,288 @@ func TestVim_VisualYankFiresOnYank(t *testing.T) {
 		}
 	})
 }
+
+// vimKeyMsgs turns a key script into key presses. <Esc>, <CR> and <BS> name
+// the special keys; every other rune is typed as itself.
+func vimKeyMsgs(script string) []tea.Msg {
+	special := map[string]tea.Msg{
+		"<Esc>": keyEsc(),
+		"<CR>":  keyEnter(),
+		"<BS>":  tea.KeyPressMsg{Code: tea.KeyBackspace},
+	}
+	var msgs []tea.Msg
+	for len(script) > 0 {
+		matched := false
+		for name, msg := range special {
+			if strings.HasPrefix(script, name) {
+				msgs = append(msgs, msg)
+				script = script[len(name):]
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			r := []rune(script)[0]
+			msgs = append(msgs, keyPress(r))
+			script = script[len(string(r)):]
+		}
+	}
+	return msgs
+}
+
+// vimCase is one key script run from a seeded buffer and cursor, checked
+// against the buffer, cursor and mode vim leaves.
+type vimCase struct {
+	name     string
+	seed     string
+	row, col int
+	keys     string
+	want     string
+	wantRow  int
+	wantCol  int
+	wantMode VimMode
+}
+
+func vimRunCase(t *testing.T, tc vimCase) Model {
+	t.Helper()
+	m := vimSetup(t)
+	m.SetValue(tc.seed)
+	m.row = tc.row
+	m.SetCursorColumn(tc.col)
+	for _, msg := range vimKeyMsgs(tc.keys) {
+		m, _ = m.Update(msg)
+	}
+	return m
+}
+
+func vimRunCases(t *testing.T, cases []vimCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := vimRunCase(t, tc)
+			if got := m.Value(); got != tc.want {
+				t.Fatalf("value: got %q want %q", got, tc.want)
+			}
+			if m.Line() != tc.wantRow || m.Column() != tc.wantCol {
+				t.Fatalf("cursor: got (%d,%d) want (%d,%d)", m.Line(), m.Column(), tc.wantRow, tc.wantCol)
+			}
+			if m.VimMode() != tc.wantMode {
+				t.Fatalf("mode: got %v want %v", m.VimMode(), tc.wantMode)
+			}
+		})
+	}
+}
+
+func TestVim_Join(t *testing.T) {
+	vimRunCases(t, []vimCase{
+		{name: "J inserts one space, cursor on it", seed: "foo\nbar", keys: "J", want: "foo bar", wantCol: 3, wantMode: ModeNormal},
+		{name: "J strips leading whitespace", seed: "foo\n    bar", keys: "J", want: "foo bar", wantCol: 3, wantMode: ModeNormal},
+		{name: "J keeps trailing whitespace, adds none", seed: "foo \nbar", keys: "J", want: "foo bar", wantCol: 4, wantMode: ModeNormal},
+		{name: "J no space before )", seed: "foo(\n  )", keys: "J", want: "foo()", wantCol: 4, wantMode: ModeNormal},
+		{name: "J no space after period (joinspaces off)", seed: "end.\nnext", keys: "J", want: "end. next", wantCol: 4, wantMode: ModeNormal},
+		{name: "J with empty next line", seed: "foo\n", keys: "J", want: "foo", wantCol: 2, wantMode: ModeNormal},
+		{name: "J with whitespace-only next line", seed: "foo\n   ", keys: "J", want: "foo", wantCol: 2, wantMode: ModeNormal},
+		{name: "J from empty line adds no space", seed: "\n  bar", keys: "J", want: "bar", wantCol: 0, wantMode: ModeNormal},
+		{name: "J from middle of line", seed: "foo\nbar", col: 1, keys: "J", want: "foo bar", wantCol: 3, wantMode: ModeNormal},
+		{name: "J on last line does nothing", seed: "foo\nbar", row: 1, col: 1, keys: "J", want: "foo\nbar", wantRow: 1, wantCol: 1, wantMode: ModeNormal},
+		{name: "1J joins two lines", seed: "a\nb\nc", keys: "1J", want: "a b\nc", wantCol: 1, wantMode: ModeNormal},
+		{name: "2J joins two lines", seed: "a\nb\nc", keys: "2J", want: "a b\nc", wantCol: 1, wantMode: ModeNormal},
+		{name: "3J joins three lines", seed: "a\nb\nc\nd", keys: "3J", want: "a b c\nd", wantCol: 3, wantMode: ModeNormal},
+		{name: "count past end clamps", seed: "a\nb", keys: "5J", want: "a b", wantCol: 1, wantMode: ModeNormal},
+		{name: "count on last line does nothing", seed: "a\nb", row: 1, keys: "3J", want: "a\nb", wantRow: 1, wantMode: ModeNormal},
+		{name: "middle rows", seed: "x\na\n  b\ny", row: 1, keys: "J", want: "x\na b\ny", wantRow: 1, wantCol: 1, wantMode: ModeNormal},
+		// do_join tracks the end of the previous line's text, which an
+		// emptied whitespace-only line resets.
+		{name: "3J over blank middle line", seed: "a \n\nb", keys: "3J", want: "a  b", wantCol: 2, wantMode: ModeNormal},
+		{name: "J undo is one step", seed: "a\n  b\nc", keys: "3Ju", want: "a\n  b\nc", wantMode: ModeNormal},
+		{name: "gJ keeps whitespace", seed: "foo\n    bar", keys: "gJ", want: "foo    bar", wantCol: 3, wantMode: ModeNormal},
+		{name: "gJ adds no space", seed: "foo\nbar", keys: "gJ", want: "foobar", wantCol: 3, wantMode: ModeNormal},
+		{name: "3gJ", seed: "a\n b\n c\nd", keys: "3gJ", want: "a b c\nd", wantCol: 3, wantMode: ModeNormal},
+		{name: "gJ on last line does nothing", seed: "a\nb", row: 1, keys: "gJ", want: "a\nb", wantRow: 1, wantMode: ModeNormal},
+		{name: "gJ with empty next line", seed: "ab\n", keys: "gJ", want: "ab", wantCol: 1, wantMode: ModeNormal},
+		{name: "visual line J", seed: "a\nb\nc\nd", keys: "VjjJ", want: "a b c\nd", wantCol: 3, wantMode: ModeNormal},
+		{name: "visual J upward selection", seed: "a\nb\nc", row: 1, keys: "VkJ", want: "a b\nc", wantCol: 1, wantMode: ModeNormal},
+		{name: "visual J single line joins two", seed: "a\nb\nc", keys: "vJ", want: "a b\nc", wantCol: 1, wantMode: ModeNormal},
+		{name: "visual J on last line does nothing", seed: "a\nb", row: 1, keys: "VJ", want: "a\nb", wantRow: 1, wantMode: ModeNormal},
+		{name: "visual gJ", seed: "a\n  b\nc", keys: "VjgJ", want: "a  b\nc", wantCol: 1, wantMode: ModeNormal},
+	})
+}
+
+func TestVim_Shift(t *testing.T) {
+	vimRunCases(t, []vimCase{
+		{name: ">> indents by shiftwidth", seed: "foo", keys: ">>", want: "    foo", wantCol: 4, wantMode: ModeNormal},
+		{name: ">> twice", seed: "foo", keys: ">>>>", want: "        foo", wantCol: 8, wantMode: ModeNormal},
+		{name: "<< removes shiftwidth", seed: "      foo", keys: "<<", want: "  foo", wantCol: 2, wantMode: ModeNormal},
+		{name: "<< floors at zero", seed: "  foo", keys: "<<", want: "foo", wantCol: 0, wantMode: ModeNormal},
+		{name: "<< never removes text", seed: "foo", col: 2, keys: "<<", want: "foo", wantCol: 0, wantMode: ModeNormal},
+		{name: ">> cursor to first non-blank", seed: "  foo bar", col: 7, keys: ">>", want: "      foo bar", wantCol: 6, wantMode: ModeNormal},
+		{name: "3>> shifts three lines", seed: "a\nb\nc\nd", keys: "3>>", want: "    a\n    b\n    c\nd", wantCol: 4, wantMode: ModeNormal},
+		{name: ">3> shifts three lines", seed: "a\nb\nc\nd", keys: ">3>", want: "    a\n    b\n    c\nd", wantCol: 4, wantMode: ModeNormal},
+		{name: "3<< unindents three lines", seed: "    a\n  b\nc\n    d", keys: "3<<", want: "a\nb\nc\n    d", wantMode: ModeNormal},
+		{name: "count past end clamps", seed: "a\nb\nc", row: 1, keys: "5>>", want: "a\n    b\n    c", wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "count on last line does nothing", seed: "a\nb", row: 1, keys: "2>>", want: "a\nb", wantRow: 1, wantMode: ModeNormal},
+		{name: ">> on last line", seed: "a\nb", row: 1, keys: ">>", want: "a\n    b", wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "empty lines stay empty", seed: "a\n\nb", keys: "3>>", want: "    a\n\n    b", wantCol: 4, wantMode: ModeNormal},
+		{name: ">> on empty line", seed: "", keys: ">>", want: "", wantMode: ModeNormal},
+		{name: ">> on whitespace-only line", seed: "  ", keys: ">>", want: "      ", wantCol: 5, wantMode: ModeNormal},
+		{name: "<< on whitespace-only line", seed: "      ", keys: "<<", want: "  ", wantCol: 1, wantMode: ModeNormal},
+		{name: ">j shifts two lines", seed: "a\nb\nc", keys: ">j", want: "    a\n    b\nc", wantCol: 4, wantMode: ModeNormal},
+		{name: "<k from below", seed: "    a\n    b", row: 1, keys: "<k", want: "a\nb", wantMode: ModeNormal},
+		{name: ">G", seed: "a\nb\nc", row: 1, keys: ">G", want: "a\n    b\n    c", wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: ">ip", seed: "a\nb\n\nc", keys: ">ip", want: "    a\n    b\n\nc", wantCol: 4, wantMode: ModeNormal},
+		{name: ">w shifts current line", seed: "a b\nc", keys: ">w", want: "    a b\nc", wantCol: 4, wantMode: ModeNormal},
+		{name: "Esc cancels pending >", seed: "a", keys: "><Esc>>", want: "a", wantMode: ModeNormal},
+		{name: "3>> undo is one step", seed: "a\nb\nc", keys: "3>>u", want: "a\nb\nc", wantMode: ModeNormal},
+		{name: "visual > shifts selection", seed: "a\nb\nc", keys: "Vj>", want: "    a\n    b\nc", wantCol: 4, wantMode: ModeNormal},
+		{name: "visual count is the amount", seed: "a\nb\nc", keys: "Vj3>", want: "            a\n            b\nc", wantCol: 12, wantMode: ModeNormal},
+		{name: "visual < shifts selection", seed: "a\n        b\n    c", row: 2, keys: "vk<", want: "a\n    b\nc", wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "visual 2< ", seed: "        a\n  b", keys: "Vj2<", want: "a\nb", wantMode: ModeNormal},
+		{name: "charwise visual shifts whole lines", seed: "abc\ndef", col: 1, keys: "vj>", want: "    abc\n    def", wantCol: 4, wantMode: ModeNormal},
+		{name: "visual > undo", seed: "a\nb", keys: "Vj>u", want: "a\nb", wantMode: ModeNormal},
+	})
+}
+
+func TestVim_Search(t *testing.T) {
+	const buf = "foo bar\nbaz foo\nfoo"
+	vimRunCases(t, []vimCase{
+		{name: "/ finds next match", seed: buf, keys: "/foo<CR>", want: buf, wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "/ skips match under cursor", seed: buf, row: 1, col: 4, keys: "/foo<CR>", want: buf, wantRow: 2, wantMode: ModeNormal},
+		{name: "n repeats forward", seed: buf, keys: "/foo<CR>n", want: buf, wantRow: 2, wantMode: ModeNormal},
+		{name: "n wraps at bottom", seed: buf, keys: "/foo<CR>nn", want: buf, wantMode: ModeNormal},
+		{name: "N reverses", seed: buf, keys: "/foo<CR>N", want: buf, wantMode: ModeNormal},
+		{name: "N wraps at top", seed: buf, keys: "/foo<CR>NN", want: buf, wantRow: 2, wantMode: ModeNormal},
+		{name: "? searches backward with wrap", seed: buf, keys: "?foo<CR>", want: buf, wantRow: 2, wantMode: ModeNormal},
+		{name: "n after ? continues backward", seed: buf, keys: "?foo<CR>n", want: buf, wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "N after ? goes forward", seed: buf, keys: "?foo<CR>N", want: buf, wantMode: ModeNormal},
+		{name: "count on /", seed: buf, keys: "2/foo<CR>", want: buf, wantRow: 2, wantMode: ModeNormal},
+		{name: "count on n wraps", seed: buf, keys: "/foo<CR>3n", want: buf, wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "count on N", seed: buf, row: 2, keys: "/foo<CR>2N", want: buf, wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "sole match wraps onto itself", seed: "abc", col: 1, keys: "/b<CR>", want: "abc", wantCol: 1, wantMode: ModeNormal},
+		{name: "no match leaves cursor", seed: buf, keys: "/qqq<CR>", want: buf, wantMode: ModeNormal},
+		{name: "Esc cancels the prompt", seed: buf, keys: "/foo<Esc>n", want: buf, wantMode: ModeNormal},
+		{name: "backspace edits the prompt", seed: buf, keys: "/fox<BS>o<CR>", want: buf, wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "backspace on empty prompt cancels", seed: buf, keys: "/<BS>j", want: buf, wantRow: 1, wantMode: ModeNormal},
+		{name: "empty pattern reuses last", seed: buf, keys: "/foo<CR>/<CR>", want: buf, wantRow: 2, wantMode: ModeNormal},
+		{name: "empty ? reuses last backward", seed: buf, keys: "/foo<CR>?<CR>", want: buf, wantMode: ModeNormal},
+		{name: "prompt swallows normal-mode keys", seed: buf, keys: "/dd<Esc>", want: buf, wantMode: ModeNormal},
+		{name: "case sensitive by default", seed: "Foo foo", keys: "/Foo<CR>", want: "Foo foo", wantMode: ModeNormal},
+		{name: "\\c ignores case", seed: "x Foo", keys: "/foo\\c<CR>", want: "x Foo", wantCol: 2, wantMode: ModeNormal},
+		{name: ". matches any char", seed: "foo bar", keys: "/b.r<CR>", want: "foo bar", wantCol: 4, wantMode: ModeNormal},
+		{name: "[] collection", seed: "a1 b2", keys: "/b[0-9]<CR>", want: "a1 b2", wantCol: 3, wantMode: ModeNormal},
+		{name: "( is literal", seed: "f(x)", keys: "/(<CR>", want: "f(x)", wantCol: 1, wantMode: ModeNormal},
+		{name: "+ is literal", seed: "a+b aab", keys: "/a+<CR>", want: "a+b aab", wantMode: ModeNormal},
+		{name: "\\+ repeats", seed: "xb aab", keys: "/a\\+b<CR>", want: "xb aab", wantCol: 3, wantMode: ModeNormal},
+		{name: "\\| alternates", seed: "x yz", keys: "/z\\|y<CR>", want: "x yz", wantCol: 2, wantMode: ModeNormal},
+		{name: "\\< word start", seed: "abar bar", keys: "/\\<bar<CR>", want: "abar bar", wantCol: 5, wantMode: ModeNormal},
+		{name: "^ anchors line start", seed: buf, keys: "/^foo<CR>", want: buf, wantRow: 2, wantMode: ModeNormal},
+		{name: "^ mid-pattern is literal", seed: "a^b ab", col: 3, keys: "/a^b<CR>", want: "a^b ab", wantMode: ModeNormal},
+		{name: "$ anchors line end", seed: buf, keys: "/foo$<CR>", want: buf, wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "$ alone rests on last char", seed: "ab\ncd", keys: "/$<CR>n", want: "ab\ncd", wantRow: 1, wantCol: 1, wantMode: ModeNormal},
+		{name: "\\. is literal", seed: "axb a.b", keys: "/a\\.b<CR>", want: "axb a.b", wantCol: 4, wantMode: ModeNormal},
+		{name: "\\{n} counts", seed: "ab aab", keys: "/a\\{2}b<CR>", want: "ab aab", wantCol: 3, wantMode: ModeNormal},
+		{name: "invalid pattern leaves cursor", seed: "abc", keys: "/[c-a]<CR>", want: "abc", wantMode: ModeNormal},
+		{name: "multibyte columns are runes", seed: "héllo wörld", keys: "/w<CR>", want: "héllo wörld", wantCol: 6, wantMode: ModeNormal},
+		{name: "search extends visual selection", seed: "foo bar", keys: "v/bar<CR>d", want: "ar", wantMode: ModeNormal},
+		{name: "search in visual keeps visual", seed: "foo bar", keys: "v/bar<CR>", want: "foo bar", wantCol: 4, wantMode: ModeVisualChar},
+		{name: "* whole word", seed: "foo foobar\nfoo", keys: "*", want: "foo foobar\nfoo", wantRow: 1, wantMode: ModeNormal},
+		{name: "# whole word backward", seed: "foo foobar\nfoo", row: 1, keys: "#", want: "foo foobar\nfoo", wantMode: ModeNormal},
+		{name: "* from middle of word", seed: "foo foo", col: 1, keys: "*", want: "foo foo", wantCol: 4, wantMode: ModeNormal},
+		{name: "# from middle of word skips it", seed: "foo foo", col: 5, keys: "#", want: "foo foo", wantMode: ModeNormal},
+		{name: "* uses keyword after cursor", seed: "  foo x foo", keys: "*", want: "  foo x foo", wantCol: 8, wantMode: ModeNormal},
+		{name: "* on punctuation picks next keyword", seed: "a.b b", col: 1, keys: "*", want: "a.b b", wantCol: 4, wantMode: ModeNormal},
+		{name: "* without keyword uses non-blank run", seed: "a ->\nx->", col: 2, keys: "*", want: "a ->\nx->", wantRow: 1, wantCol: 1, wantMode: ModeNormal},
+		{name: "* sole occurrence wraps to its start", seed: "foo bar", col: 5, keys: "*", want: "foo bar", wantCol: 4, wantMode: ModeNormal},
+		{name: "2*", seed: "foo foo foo", keys: "2*", want: "foo foo foo", wantCol: 8, wantMode: ModeNormal},
+		{name: "n after *", seed: "foo foo foo", keys: "*n", want: "foo foo foo", wantCol: 8, wantMode: ModeNormal},
+		{name: "N after #", seed: "foo foo foo", col: 8, keys: "#N", want: "foo foo foo", wantCol: 8, wantMode: ModeNormal},
+		{name: "* on punctuation run is literal", seed: "a .*\naaa .*", col: 2, keys: "*", want: "a .*\naaa .*", wantRow: 1, wantCol: 4, wantMode: ModeNormal},
+		{name: "* on punctuation searches the next keyword whole", seed: "a.b axb a.b", col: 1, keys: "*", want: "a.b axb a.b", wantCol: 10, wantMode: ModeNormal},
+		{name: "visual J undo returns to selection start", seed: "a\nb\nc", keys: "VjJu", want: "a\nb\nc", wantMode: ModeNormal},
+		{name: "* on unicode word", seed: "café cafés café", keys: "*", want: "café cafés café", wantCol: 11, wantMode: ModeNormal},
+		{name: "* on blank line does nothing", seed: "\nfoo", keys: "*", want: "\nfoo", wantMode: ModeNormal},
+		{name: "n without search does nothing", seed: buf, keys: "n", want: buf, wantMode: ModeNormal},
+	})
+}
+
+func TestVim_SearchPrompt(t *testing.T) {
+	m := vimSetup(t)
+	m.SetValue("foo")
+	if _, open := m.VimSearchPrompt(); open {
+		t.Fatalf("prompt open before /")
+	}
+	for _, msg := range vimKeyMsgs("/fo") {
+		m, _ = m.Update(msg)
+	}
+	if got, open := m.VimSearchPrompt(); !open || got != "/fo" {
+		t.Fatalf("prompt: got %q open=%v", got, open)
+	}
+	m, _ = m.Update(tea.PasteMsg{Content: "o\n"})
+	if got, _ := m.VimSearchPrompt(); got != "/foo" {
+		t.Fatalf("paste into prompt: got %q", got)
+	}
+	if m.Value() != "foo" {
+		t.Fatalf("paste reached the buffer: %q", m.Value())
+	}
+	m, _ = m.Update(keyEnter())
+	if _, open := m.VimSearchPrompt(); open {
+		t.Fatalf("prompt open after Enter")
+	}
+	m, _ = m.Update(keyPress('?'))
+	if got, open := m.VimSearchPrompt(); !open || got != "?" {
+		t.Fatalf("? prompt: got %q open=%v", got, open)
+	}
+	m.SetVimMode(ModeNormal)
+	if _, open := m.VimSearchPrompt(); open {
+		t.Fatalf("SetVimMode left the prompt open")
+	}
+}
+
+func TestVim_ReplaceMode(t *testing.T) {
+	vimRunCases(t, []vimCase{
+		{name: "R overtypes", seed: "abcd", keys: "Rxy<Esc>", want: "xycd", wantCol: 1, wantMode: ModeNormal},
+		{name: "R appends past end of line", seed: "ab", keys: "Rwxyz<Esc>", want: "wxyz", wantCol: 3, wantMode: ModeNormal},
+		{name: "R stays on its line", seed: "ab\ncd", keys: "Rwxyz<Esc>", want: "wxyz\ncd", wantCol: 3, wantMode: ModeNormal},
+		{name: "R stays in Replace until Esc", seed: "abcd", keys: "Rx", want: "xbcd", wantCol: 1, wantMode: ModeReplace},
+		{name: "backspace restores replaced char", seed: "abcd", keys: "Rxy<BS><Esc>", want: "xbcd", wantMode: ModeNormal},
+		{name: "backspace removes appended char", seed: "ab", keys: "Rxyz<BS><BS><Esc>", want: "xb", wantMode: ModeNormal},
+		{name: "backspace restores all", seed: "abcd", col: 1, keys: "Rxyz<BS><BS><BS>", want: "abcd", wantCol: 1, wantMode: ModeReplace},
+		{name: "backspace before start only moves", seed: "abcd", col: 2, keys: "R<BS><BS>x<Esc>", want: "xbcd", wantMode: ModeNormal},
+		{name: "backspace at line start stays", seed: "abcd", keys: "R<BS><Esc>", want: "abcd", wantMode: ModeNormal},
+		{name: "Esc at column 0 stays", seed: "abcd", keys: "R<Esc>", want: "abcd", wantMode: ModeNormal},
+		{name: "count repeats typed text", seed: "12345678", keys: "3Rab<Esc>", want: "ababab78", wantCol: 5, wantMode: ModeNormal},
+		{name: "count repeat appends past end", seed: "12", keys: "2Rab<Esc>", want: "abab", wantCol: 3, wantMode: ModeNormal},
+		{name: "count repeats net text after backspace", seed: "123456", keys: "2Rabc<BS><Esc>", want: "abab56", wantCol: 3, wantMode: ModeNormal},
+		{name: "Enter breaks the line, deletes nothing", seed: "abcd", col: 1, keys: "Rx<CR>y<Esc>", want: "ax\nyd", wantRow: 1, wantMode: ModeNormal},
+		{name: "backspace joins a typed line break", seed: "abcd", col: 1, keys: "Rx<CR><BS><Esc>", want: "axcd", wantCol: 1, wantMode: ModeNormal},
+		{name: "R on empty line appends", seed: "", keys: "Rhi<Esc>", want: "hi", wantCol: 1, wantMode: ModeNormal},
+		{name: "undo reverts the whole R", seed: "abcd", keys: "3Rxy<Esc>u", want: "abcd", wantMode: ModeNormal},
+		{name: "r replaces one char in Normal", seed: "abc", keys: "rx", want: "xbc", wantMode: ModeNormal},
+		{name: "r then Esc cancels", seed: "abc", keys: "r<Esc>", want: "abc", wantMode: ModeNormal},
+	})
+}
+
+func TestVim_ReplaceModeStateAndShape(t *testing.T) {
+	m := vimSetup(t)
+	m.SetValue("abcd")
+	m.SetCursorColumn(0)
+	m, _ = m.Update(keyPress('r'))
+	if m.VimMode() != ModeNormal {
+		t.Fatalf("pending r: mode %v, want Normal", m.VimMode())
+	}
+	m, _ = m.Update(keyEsc())
+	m, _ = m.Update(keyPress('R'))
+	if m.VimMode() != ModeReplace {
+		t.Fatalf("R: mode %v, want Replace", m.VimMode())
+	}
+	if got := m.Styles().Cursor.Shape; got != tea.CursorUnderline {
+		t.Fatalf("R shape: got %v want Underline", got)
+	}
+	m, _ = m.Update(tea.PasteMsg{Content: "xyz"})
+	if m.Value() != "xyzd" {
+		t.Fatalf("paste in Replace: got %q want %q", m.Value(), "xyzd")
+	}
+	m, _ = m.Update(keyEsc())
+	if got := m.Styles().Cursor.Shape; got != tea.CursorBlock {
+		t.Fatalf("after Esc shape: got %v want Block", got)
+	}
+}
