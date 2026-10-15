@@ -529,6 +529,18 @@ func (m *Model) SetVimMode(mode VimMode) {
 	m.applyVimCursorShape()
 }
 
+// VimPending reports whether a Normal- or visual-mode key sequence is in
+// progress: a count, an operator, a find or `r` target, a text object, or an
+// open search prompt. Esc cancels it.
+func (m Model) VimPending() bool {
+	if !m.vimEnabled {
+		return false
+	}
+	v := m.vim
+	return v.pendingOp != 0 || v.pendingCount != 0 || v.pendingFindKind != 0 ||
+		v.pendingObject != 0 || v.search.prompting
+}
+
 // VimSearchPrompt returns the command line of an open `/` or `?` search
 // prompt (for example "/foo"), and whether a prompt is open. Consumers render
 // it; the textarea does not.

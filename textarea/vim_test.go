@@ -1770,3 +1770,27 @@ func TestVim_ReplaceModeStateAndShape(t *testing.T) {
 		t.Fatalf("after Esc shape: got %v want Block", got)
 	}
 }
+
+func TestVim_Pending(t *testing.T) {
+	for _, keys := range []string{"3", "d", ">", "g", "f", "r", "di", "/", "/ab"} {
+		t.Run(keys, func(t *testing.T) {
+			m := vimRunCase(t, vimCase{seed: "abc", keys: keys})
+			if !m.VimPending() {
+				t.Fatalf("%q: VimPending false", keys)
+			}
+			m, _ = m.Update(keyEsc())
+			if m.VimPending() {
+				t.Fatalf("%q: Esc left VimPending true", keys)
+			}
+			if m.VimMode() != ModeNormal {
+				t.Fatalf("%q: mode %v after Esc", keys, m.VimMode())
+			}
+		})
+	}
+	for _, keys := range []string{"", "l", "dd", "/a<CR>", "rx"} {
+		m := vimRunCase(t, vimCase{seed: "abc", keys: keys})
+		if m.VimPending() {
+			t.Fatalf("%q: VimPending true", keys)
+		}
+	}
+}
