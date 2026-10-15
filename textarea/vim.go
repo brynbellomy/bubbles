@@ -1677,7 +1677,8 @@ func vimLastRune(line []rune) rune {
 
 // vimShiftLines implements > and < over rows r1..r2: each non-empty line's
 // indent moves by amount shiftwidths (tabWidth columns), never below zero,
-// and is rewritten as spaces. The cursor lands on the first non-blank of r1.
+// and is rewritten as spaces. The cursor moves to r1 and keeps its column,
+// clamped to the shifted line, as vim does.
 func (m *Model) vimShiftLines(r1, r2 int, left bool, amount int) {
 	for r := r1; r <= r2; r++ {
 		line := m.value[r]
@@ -1702,12 +1703,7 @@ func (m *Model) vimShiftLines(r1, r2 int, left bool, amount int) {
 		m.value[r] = append(shifted, line[body:]...)
 	}
 	m.row = r1
-	m.vimMotionFirstNonBlank()
-	// A whitespace-only line has no first non-blank; Normal mode rests on
-	// its last character.
-	if n := len(m.value[m.row]); n > 0 && m.col >= n {
-		m.SetCursorColumn(n - 1)
-	}
+	m.SetCursorColumn(min(m.col, max(len(m.value[r1])-1, 0)))
 	m.repositionView()
 }
 
@@ -1837,7 +1833,8 @@ func vimWordMatcher(word []rune, whole bool) vimMatcher {
 	}
 }
 
-// vimRegexpMatcher matches re against each line. Matches do not overlap.
+// vimRegexpMatcher matches re against each line. Matches do not overlap, as
+// in vim.
 func vimRegexpMatcher(re *regexp.Regexp) vimMatcher {
 	return func(line []rune) []int {
 		s := string(line)
@@ -1908,6 +1905,8 @@ func (m *Model) vimSearchJump(match vimMatcher, forward bool, count int) bool {
 // a Go regexp. `. * [] ^ $` are special as in vim; `( ) | + ? = {` are
 // literal unless backslashed; `\< \>` become ASCII word boundaries; `\c`
 // ignores case. Matching is case-sensitive by default ('ignorecase' off).
+// Each line is matched on its own, so unlike vim a pattern never matches
+// across a line break: `\n` matches nothing.
 func vimCompilePattern(p string) (*regexp.Regexp, error) {
 	rs := []rune(p)
 	var b strings.Builder
